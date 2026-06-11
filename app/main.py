@@ -335,6 +335,23 @@ def _extract_usage_from_response(data: dict[str, Any]) -> tuple[int, int]:
     return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
 
 
+async def _aclose_quietly(stream: Any) -> None:
+    """Best-effort close of an async stream/response. Never raises.
+
+    Prevents an httpx AsyncClient leak when a streamed request is cancelled or
+    the client disconnects.
+    """
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        result = aclose()
+        if result is not None:
+            await result
+    except Exception:  # noqa: BLE001 — cleanup must never propagate
+        pass
+
+
 def _is_empty_chat_response(data: dict[str, Any]) -> bool:
     """True if a chat completion carries no usable assistant content.
 
@@ -1269,12 +1286,7 @@ async def chat_completions(
                 stream_setup_task.cancel()
                 try:
                     _, _, raw_stream_pending, _ = await stream_setup_task
-                    aclose = getattr(raw_stream_pending, "aclose", None)
-                    if callable(aclose):
-                        try:
-                            await aclose()
-                        except Exception:  # noqa: BLE001
-                            pass
+                    await _aclose_quietly(raw_stream_pending)
                 except (asyncio.CancelledError, ProviderError, Exception):  # noqa: BLE001
                     pass
                 return _build_pre_block_response(pre_decision)
@@ -1349,15 +1361,9 @@ async def chat_completions(
                     yield b"data: [DONE]\n\n"
                     upstream_done_seen = True
                 finally:
-                    # W-DEEP-AUDIT (2026-05-05): Bei Client-Disconnect
-                    # raw_stream explizit schliessen — sonst Ressourcen-
-                    # Leak (httpx-AsyncClient bleibt bis GC haengen).
-                    aclose = getattr(raw_stream, "aclose", None)
-                    if callable(aclose):
-                        try:
-                            await aclose()
-                        except Exception:
-                            pass
+                    # On client disconnect, close raw_stream explicitly —
+                    # otherwise the httpx AsyncClient leaks until GC.
+                    await _aclose_quietly(raw_stream)
 
                 # W3: Streaming-Post-Guard NACH Stream-Ende, aber VOR
                 # finalem [DONE]. Bei Block: Warning-Event injizieren.
@@ -1752,9 +1758,8 @@ async def audio_transcriptions(
             }
         )
     except httpx.HTTPStatusError as exc:
-        # W-DEEP-AUDIT (2026-05-05): Sauberer ProxyError-Contract statt
-        # raw text in `detail`. Konsistent mit /v1/chat/completions
-        # und /v1/embeddings.
+        # Clean ProxyError contract instead of raw text in `detail`,
+        # consistent with /v1/chat/completions and /v1/embeddings.
         raise ProxyError(
             http_status=502,
             code="whisper_upstream_error",

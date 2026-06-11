@@ -128,10 +128,9 @@ class OpenAICompatibleProvider(BaseProvider):
                         fn = tc.get("function") if isinstance(tc, dict) else None
                         if isinstance(fn, dict):
                             args = fn.get("arguments", "")
-                            # Anthropic-Format: arguments kann dict sein.
-                            # OpenAI-Spec: arguments MUSS JSON-String sein.
-                            # Defensive Normalisierung — sonst rejecten OVH/OpenAI
-                            # Multi-Turn-Tool-History (W-DEEP-AUDIT 2026-05-05).
+                            # Some upstreams send tool-call arguments as a dict,
+                            # but the OpenAI spec requires a JSON string. Normalise
+                            # defensively, else multi-turn tool history is rejected.
                             if isinstance(args, dict):
                                 try:
                                     args = json.dumps(args, ensure_ascii=False)

@@ -21,6 +21,7 @@ import math
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,7 +59,7 @@ class SemanticCache:
         threshold: float = 0.95,
         max_entries: int = 1000,
         ttl_seconds: int = 3600,
-        now: "callable | None" = None,
+        now: "Callable[[], float] | None" = None,
     ) -> None:
         self._enabled = enabled
         self._threshold = threshold

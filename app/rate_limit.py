@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -36,7 +37,7 @@ class RateLimiter:
         burst: int = 0,
         concurrency: int = 0,
         *,
-        now: "callable | None" = None,
+        now: "Callable[[], float] | None" = None,
     ) -> None:
         self._per_minute = max(0, per_minute)
         # Bucket capacity = burst if given, else the per-minute rate.

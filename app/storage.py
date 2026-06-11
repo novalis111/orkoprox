@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 
 class KeyValueStore(Protocol):
@@ -49,7 +50,7 @@ class KeyValueStore(Protocol):
 class RedisStore:
     """KeyValueStore backed by a Redis client (decode_responses=False)."""
 
-    def __init__(self, redis_client: object) -> None:
+    def __init__(self, redis_client: Any) -> None:
         self._r = redis_client
 
     def get_str(self, key: str) -> str | None:
@@ -103,7 +104,7 @@ class MemoryStore:
     The Zero-Config default. State lives in the process and resets on restart.
     """
 
-    def __init__(self, *, now: "callable | None" = None) -> None:
+    def __init__(self, *, now: "Callable[[], float] | None" = None) -> None:
         self._now = now or time.time
         self._lock = threading.Lock()
         self._str: dict[str, str] = {}

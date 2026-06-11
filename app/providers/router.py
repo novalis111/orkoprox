@@ -954,11 +954,6 @@ class ProviderRegistry:
             candidate_model = self._default_model_for_provider(candidate, is_embedding=True)
             candidate_payload = dict(payload)
             candidate_payload["model"] = candidate_model
-            # Inject dimensions for Matryoshka models (e.g. qwen3-embedding)
-            # that need explicit dimension request to produce 1536 instead of
-            # their native default (2560).
-            if candidate == "ollama" and self.settings.ollama_embedding_dimensions:
-                candidate_payload["dimensions"] = self.settings.ollama_embedding_dimensions
 
             try:
                 data = await self._run_with_retry(provider, "embeddings", candidate_payload, ctx)
