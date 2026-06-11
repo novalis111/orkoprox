@@ -31,6 +31,28 @@ class Settings(BaseSettings):
     proxy_api_keys: str = ""
     production_min_api_key_length: int = 40
 
+    # ── Admin plane (strictly separate from the data plane) ────────────────
+    # Keys that may call /v1/admin/* (key management, tenant usage). These are
+    # NOT accepted on data-plane (/v1/chat, …) requests, and data-plane keys are
+    # NEVER accepted on the admin plane — a data key can never manage keys.
+    # Secure by default: if empty, the admin endpoints are disabled (403), not
+    # open. Comma-separated.
+    admin_api_keys: str = ""
+
+    # ── Per-key request rate limiting ──────────────────────────────────────
+    # Token quotas alone don't protect against burst/DoS. These cap request
+    # rate and in-flight concurrency per API key. 0 = unlimited (disabled).
+    rate_limit_per_minute: int = 0
+    rate_limit_concurrency: int = 0
+    # Burst allowance on top of the per-minute rate (token-bucket capacity).
+    rate_limit_burst: int = 0
+
+    # ── Audit log (append-only) ────────────────────────────────────────────
+    # Records who/when/which-key-prefix/which-model/cost. NEVER the full key and
+    # NEVER prompt content (privacy by default — request bodies are not logged).
+    audit_log_enabled: bool = False
+    audit_log_path: str = "/tmp/orkoprox-audit.jsonl"
+
     # Provider selection. The default ships with a single OpenAI-compatible
     # upstream ("ovh"); add your own providers via env (see PROVIDERS docs).
     # `stub` is an internal test placeholder, never a real provider.
@@ -247,6 +269,11 @@ class Settings(BaseSettings):
         return {x.strip() for x in self.proxy_api_keys.split(",") if x.strip()}
 
     @property
+    def admin_keys(self) -> set[str]:
+        """Keys allowed on the admin plane (/v1/admin/*). Strictly separate."""
+        return {x.strip() for x in self.admin_api_keys.split(",") if x.strip()}
+
+    @property
     def guard_bypass_key_set(self) -> set[str]:
         """API-Keys die Guard-Layer ueberspringen duerfen (z.B. internal Avi)."""
         return {x.strip() for x in self.guard_bypass_keys.split(",") if x.strip()}
@@ -278,6 +305,28 @@ class Settings(BaseSettings):
                 "PROXY_API_KEYS contains keys shorter than "
                 f"{self.production_min_api_key_length} characters for production"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_admin_plane_separation(self) -> "Settings":
+        """Admin keys must be distinct from data-plane keys, and long enough
+        in production. A key that is both would breach plane separation."""
+        admin = self.admin_keys
+        if not admin:
+            return self
+        overlap = admin & self.api_keys
+        if overlap:
+            raise ValueError(
+                "ADMIN_API_KEYS must not overlap with PROXY_API_KEYS — "
+                "the admin and data planes must use distinct keys."
+            )
+        if self.is_production:
+            short = [k for k in admin if len(k) < self.production_min_api_key_length]
+            if short:
+                raise ValueError(
+                    "ADMIN_API_KEYS contains keys shorter than "
+                    f"{self.production_min_api_key_length} characters for production"
+                )
         return self
 
     @property

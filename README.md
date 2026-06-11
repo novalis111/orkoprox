@@ -111,6 +111,10 @@ Copy `.env.example` to `.env` and edit. All settings are environment variables.
 | `METRICS_ENABLED` | `true` | Expose `/metrics` Prometheus endpoint |
 | `BRAND_HEADER_PREFIX` | `X-Orkoprox` | Response header prefix — rename for white-label deployments |
 | `PRODUCTION_ALLOWED_PROVIDERS` | _(optional)_ | Allowlist of providers permitted in production environments |
+| `ADMIN_API_KEYS` | _(optional)_ | Keys for the admin plane (`/v1/admin/*`). Empty = admin endpoints disabled |
+| `RATE_LIMIT_PER_MINUTE` | `0` | Per-key request rate limit (0 = off) |
+| `RATE_LIMIT_CONCURRENCY` | `0` | Per-key in-flight request limit (0 = off) |
+| `AUDIT_LOG_ENABLED` | `false` | Append-only audit log (key prefixes only, never prompt content) |
 | `ALERT_TELEGRAM_BOT_TOKEN` | _(optional)_ | Telegram bot token for alerting |
 | `ALERT_TELEGRAM_CHAT_ID` | _(optional)_ | Telegram chat/channel ID for alerts |
 
@@ -176,9 +180,13 @@ The MIT core is not crippled. You can run it in production at scale without the 
 
 ## Security
 
-This gateway holds your provider keys. Please read [SECURITY.md](SECURITY.md) before deploying.
+This gateway holds your provider keys, so security is structural, not bolted on:
 
-Responsible disclosure matters — if you find a vulnerability (especially in key handling or the admin/data-plane boundary), please report it privately rather than opening a public issue. Details in [SECURITY.md](SECURITY.md).
+- **Admin and data planes are strictly separated.** The `/v1/admin/*` endpoints (key management, tenant usage) are guarded by a dedicated key set (`ADMIN_API_KEYS`). A data-plane key can *never* manage keys, and an admin key is *never* accepted on the data plane. Secure by default: with no admin key configured, the admin plane is disabled, not open.
+- **Per-key rate and concurrency limits** sit alongside token budgets to blunt bursts and abuse.
+- **Provider keys never get logged**, and the optional audit log records key *prefixes* and metadata only — never the full key, never prompt content.
+
+Please read [SECURITY.md](SECURITY.md) before deploying. Responsible disclosure matters — if you find a vulnerability (especially in key handling or the admin/data-plane boundary), please report it privately rather than opening a public issue.
 
 ---
 

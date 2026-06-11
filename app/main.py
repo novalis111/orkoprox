@@ -44,6 +44,9 @@ from app.services.content_moderation import (
 )
 from app.token_metering import TokenMeteringService, KeyConfig
 from app.schemas import ChatCompletionsRequest, EmbeddingsRequest, RerankRequest
+from app.admin_auth import enforce_admin_auth
+from app.audit_log import AuditLog, mask_key
+from app.rate_limit import RateLimiter
 
 
 settings = get_settings()
@@ -62,6 +65,28 @@ if settings.redis_url:
 metering_service = TokenMeteringService(
     redis_client=_metering_redis, header_prefix=settings.brand_header_prefix
 )
+
+# Per-key request rate / concurrency limiting (opt-in; 0 = disabled).
+rate_limiter = RateLimiter(
+    per_minute=settings.rate_limit_per_minute,
+    burst=settings.rate_limit_burst,
+    concurrency=settings.rate_limit_concurrency,
+)
+
+# Append-only audit log (opt-in). Never records full keys or prompt content.
+audit_log = AuditLog(enabled=settings.audit_log_enabled, path=settings.audit_log_path)
+
+
+def _enforce_rate_limit(api_key: str | None) -> None:
+    """Reject with 429 if the key exceeds its request-rate budget."""
+    key = api_key or "anonymous"
+    if not rate_limiter.check_rate(key):
+        raise ProxyError(
+            http_status=429,
+            code="rate_limit_exceeded",
+            message="request rate limit exceeded — slow down",
+        )
+
 
 _healthz_redis = None
 if settings.redis_url:
@@ -154,8 +179,10 @@ def _extract_api_key(x_api_key: str | None, authorization: str | None) -> str | 
     return token.strip()
 
 
-def _enforce_internal_auth(x_api_key: str | None, authorization: str | None) -> str | None:
-    """Validate API key and return it for metering. Returns None if auth is disabled."""
+def _authenticate_data_key(
+    x_api_key: str | None, authorization: str | None
+) -> str | None:
+    """Validate a data-plane API key and return it. Returns None if auth is disabled."""
     allowed = settings.api_keys
     if not settings.proxy_auth_required:
         return None
@@ -182,6 +209,18 @@ def _enforce_internal_auth(x_api_key: str | None, authorization: str | None) -> 
                 return presented_key
         raise ProxyError(http_status=401, code="invalid_api_key", message="invalid_api_key")
     return presented_key
+
+
+def _enforce_internal_auth(x_api_key: str | None, authorization: str | None) -> str | None:
+    """Authenticate a data-plane request and enforce its request-rate budget.
+
+    Returns the API key (for metering) or None if auth is disabled. Rate
+    limiting runs after successful auth so unauthenticated traffic can't be used
+    to probe limits.
+    """
+    auth_key = _authenticate_data_key(x_api_key, authorization)
+    _enforce_rate_limit(auth_key)
+    return auth_key
 
 
 def _enforce_metering_budget(api_key: str | None) -> None:
@@ -1845,8 +1884,8 @@ async def admin_list_metered_keys(
     x_api_key: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> JSONResponse:
-    """List all registered metered API keys with current usage."""
-    _enforce_internal_auth(x_api_key, authorization)
+    """List all registered metered API keys with current usage. Admin plane only."""
+    enforce_admin_auth(settings, x_api_key, authorization)
     keys = metering_service.list_all_keys()
     return JSONResponse({"keys": keys, "count": len(keys)})
 
@@ -1860,8 +1899,10 @@ async def admin_register_metered_key(
     """Register a new metered API key.
 
     Body: {"api_key": "...", "tenant_id": "...", "daily_token_limit": 500000, "package": "starter"}
+
+    Admin plane only — a data-plane key cannot reach this endpoint.
     """
-    _enforce_internal_auth(x_api_key, authorization)
+    admin_key = enforce_admin_auth(settings, x_api_key, authorization)
     body = await request.json()
     new_key = body.get("api_key", "")
     if not new_key or len(new_key) < 40:
@@ -1879,6 +1920,13 @@ async def admin_register_metered_key(
     settings.proxy_api_keys = (
         settings.proxy_api_keys + "," + new_key if settings.proxy_api_keys else new_key
     )
+    audit_log.record(
+        "key_register",
+        admin_key=mask_key(admin_key),
+        target_key=mask_key(new_key),
+        tenant_id=config.tenant_id,
+        daily_token_limit=config.daily_token_limit,
+    )
     return JSONResponse(
         {"ok": True, "tenant_id": config.tenant_id, "daily_token_limit": config.daily_token_limit}
     )
@@ -1890,11 +1938,14 @@ async def admin_revoke_metered_key(
     x_api_key: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> JSONResponse:
-    """Revoke a metered API key."""
-    _enforce_internal_auth(x_api_key, authorization)
+    """Revoke a metered API key. Admin plane only."""
+    admin_key = enforce_admin_auth(settings, x_api_key, authorization)
     body = await request.json()
     target_key = body.get("api_key", "")
     metering_service.revoke_key(target_key)
+    audit_log.record(
+        "key_revoke", admin_key=mask_key(admin_key), target_key=mask_key(target_key)
+    )
     return JSONResponse({"ok": True, "revoked": True})
 
 
@@ -1905,8 +1956,8 @@ async def admin_get_tenant_usage(
     x_api_key: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> JSONResponse:
-    """Get usage for a specific tenant over the last N days."""
-    _enforce_internal_auth(x_api_key, authorization)
+    """Get usage for a specific tenant over the last N days. Admin plane only."""
+    enforce_admin_auth(settings, x_api_key, authorization)
     # Find key for tenant
     all_keys = metering_service.list_all_keys()
     tenant_keys = [k for k in all_keys if k["tenant_id"] == tenant_id]
