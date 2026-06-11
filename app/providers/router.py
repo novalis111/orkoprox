@@ -268,6 +268,12 @@ class ProviderRegistry:
                     preferred_model=self._normalize_requested_model(model),
                     route_key=route_key,
                 )
+            if maybe_prefix in self._custom_provider_names():
+                return _RouteDecision(
+                    preferred_provider=maybe_prefix,
+                    preferred_model=self._normalize_requested_model(model),
+                    route_key=route_key,
+                )
         return _RouteDecision(
             preferred_provider=PROVIDER_ALIASES.get(
                 self.settings.effective_primary_provider, "stub"

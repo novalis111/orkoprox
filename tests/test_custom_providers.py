@@ -46,6 +46,24 @@ def test_custom_provider_prefix_routes_as_prefixed():
     assert registry._route_key("baseten/nvidia/Nemotron-120B-A12B") == "prefixed"
 
 
+def test_custom_provider_prefix_resolves_to_that_provider():
+    # Regression: a custom-provider prefix must route to the custom provider,
+    # not fall through to the primary (which previously swallowed baseten/*).
+    s = _settings_with(
+        {
+            "baseten": {
+                "base_url": "https://inference.baseten.co/v1",
+                "api_key": "x",
+                "default_model": "nvidia/Nemotron-120B-A12B",
+            }
+        }
+    )
+    registry = ProviderRegistry(settings=s)
+    decision = registry._resolve_route_decision("baseten/nvidia/Nemotron-120B-A12B")
+    assert decision.preferred_provider == "baseten"
+    assert decision.preferred_model == "nvidia/Nemotron-120B-A12B"
+
+
 def test_empty_or_invalid_custom_providers_is_safe():
     assert Settings(custom_providers="").custom_provider_configs() == {}
     assert Settings(custom_providers="not json").custom_provider_configs() == {}
