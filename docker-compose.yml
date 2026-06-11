@@ -1,0 +1,90 @@
+services:
+  # The gateway itself. `docker compose up` builds and runs orkoprox locally.
+  # Override settings via .env (see .env.example).
+  proxy:
+    build: .
+    image: orkoprox:local
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    env_file:
+      - .env
+    environment:
+      # Point the metering/health cache at the bundled Redis by default.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis-data:/data
+
+  # Optional Whisper sidecar for /v1/audio/transcriptions.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    ports:
+      - "9000:9000"
+    environment:
+      - ASR_MODEL=${WHISPER_MODEL:-medium}
+      - ASR_ENGINE=faster_whisper
+      - ASR_LANG=${WHISPER_LANG:-}
+    volumes:
+      - whisper-models:/root/.cache/whisper
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/docs', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Optional cross-encoder reranking sidecar for /v1/rerank.
+  # HuggingFace Text-Embeddings-Inference (TEI) serves bge-reranker-v2-m3 via
+  # POST /rerank, similar to the Whisper sidecar. CPU-only.
+  #
+  # Image + model choice: TEI's Candle CPU backend is built with AVX-512
+  # intrinsics and segfaults on CPUs without AVX-512. Use the ONNX (ORT)
+  # backend instead. BAAI/bge-reranker-v2-m3 ships no ONNX artifacts, so point
+  # TEI at an ONNX export of the same model (model.onnx + model.onnx_data in the
+  # repo root). The cpu-1.7 image tag respects HF_ENDPOINT.
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    restart: unless-stopped
+    command: ["--model-id", "${RERANKER_MODEL_ID:-celinehoang/bge-reranker-v2-m3-onnx}"]
+    ports:
+      - "8092:80"
+    environment:
+      - MODEL_ID=${RERANKER_MODEL_ID:-celinehoang/bge-reranker-v2-m3-onnx}
+      # Without HF_ENDPOINT, TEI builds a relative download URL and fails with
+      # "relative URL without a base". The model is public — no token needed.
+      - HF_ENDPOINT=https://huggingface.co
+    volumes:
+      - reranker-models:/data
+    # The cpu-1.7 image has curl but no python3 — health check via curl.
+    # Generous start_period: the first start downloads ~2.3 GB of ONNX weights
+    # and warms the model; subsequent starts are fast from the volume cache.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+
+volumes:
+  redis-data:
+  whisper-models:
+  reranker-models:
