@@ -86,6 +86,7 @@ The `model` field accepts both raw provider model names and **tier/task aliases*
 - **Drop-in compatibility endpoints** — point Anthropic (`POST /v1/messages`) or Ollama (`POST /api/chat`) clients at orkoprox unchanged; it translates the wire format both ways.
 - **Semantic cache** — optional, off by default. Embedding-keyed response cache: a paraphrased prompt close enough to a previous one is served from cache, cutting cost and latency. Local and in-process.
 - **Pluggable guard hooks** — pre/post-request hooks for PII redaction (mask emails/IBANs/cards before they reach the provider), content policy, and EU-AI-Act transparency tagging. Built-ins plus your own via dotted path.
+- **Built-in admin dashboard** — a single self-contained `/admin` page (no build step, no Grafana) showing live per-key budgets, provider token usage, cache hit rate, and config. Served by the gateway, gated by the admin plane.
 - **Per-key quotas** — daily and monthly budget limits per API key. Token weighting makes expensive models consume more "virtual tokens" so you control costs accurately.
 - **Cost tracking** — EUR/USD cost attribution per request and per key. Quota-status headers (`X-Orkoprox-Quota-Status: ok|warn|critical|exceeded`) on every response.
 - **Content moderation guard** — pluggable pre/post filter (fail-open configurable). Built for EU AI Act compliance.
@@ -131,6 +132,8 @@ Copy `.env.example` to `.env` and edit. All settings are environment variables.
 
 See `.env.example` for the full list including all `MODEL_ALIAS_*` and reranker settings.
 
+With `ADMIN_API_KEYS` set, open **`/admin`** in a browser for the built-in dashboard — live per-key budgets, provider usage, and cache hit rate. It asks for an admin key in the browser and calls the admin-plane API; nothing is embedded in the page.
+
 ---
 
 ## How routing works
@@ -170,7 +173,7 @@ When Redis is configured, orkoprox tracks spend per API key.
 These features are planned and in progress — not yet in the current release:
 
 - **Streaming on the compatibility endpoints** — the Anthropic/Ollama endpoints are non-streaming for now.
-- **Built-in admin dashboard** — lightweight web UI for quota inspection and key management.
+- **Vector-indexed semantic cache** — the current cache is a brute-force scan, fine for local use; a vector index would scale it.
 
 ---
 

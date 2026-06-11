@@ -67,6 +67,8 @@ class SemanticCache:
         self._now = now or time.monotonic
         self._lock = threading.Lock()
         self._entries: "OrderedDict[str, _Entry]" = OrderedDict()
+        self._hits = 0
+        self._misses = 0
 
     @property
     def enabled(self) -> bool:
@@ -91,9 +93,11 @@ class SemanticCache:
                     best_sim = sim
                     best_key = key
             if best_key is None:
+                self._misses += 1
                 return None
             entry = self._entries.pop(best_key)
             self._entries[best_key] = entry  # mark as most-recently-used
+            self._hits += 1
             return entry.response
 
     def store(self, key: str, embedding: list[float], response: dict[str, Any]) -> None:
@@ -116,3 +120,15 @@ class SemanticCache:
     def size(self) -> int:
         with self._lock:
             return len(self._entries)
+
+    def stats(self) -> dict[str, Any]:
+        """Hit/miss counters + hit rate for the admin dashboard."""
+        with self._lock:
+            total = self._hits + self._misses
+            return {
+                "enabled": self._enabled,
+                "entries": len(self._entries),
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate": round(self._hits / total, 4) if total else 0.0,
+            }

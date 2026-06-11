@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>orkoprox · switchboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Major+Mono+Display&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0a0a12;
+    --panel: #11111d;
+    --panel-2: #161627;
+    --ink: #e8e6f0;
+    --dim: #8a87a8;
+    --cyan: #2ee6d6;
+    --magenta: #ff3d9a;
+    --amber: #ffb347;
+    --line: #262640;
+    --ok: #2ee6d6;
+    --warn: #ffb347;
+    --crit: #ff3d9a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(255,61,154,.10), transparent 60%),
+      radial-gradient(800px 600px at 0% 110%, rgba(46,230,214,.10), transparent 55%),
+      var(--bg);
+    color: var(--ink);
+    font-family: "Space Mono", ui-monospace, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: .01em;
+  }
+  /* faint scanline atmosphere */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 99;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.015) 0 1px, transparent 1px 3px);
+    mix-blend-mode: overlay;
+  }
+  a { color: var(--cyan); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 22px 80px; }
+
+  header.top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line);
+    padding-bottom: 18px; margin-bottom: 26px;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand h1 {
+    font-family: "Major Mono Display", monospace;
+    font-weight: 400; font-size: 26px; margin: 0; color: var(--ink);
+    text-shadow: 0 0 18px rgba(46,230,214,.35);
+  }
+  .brand .dot {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: var(--cyan); box-shadow: 0 0 10px var(--cyan), 0 0 22px var(--cyan);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:.4;transform:scale(.85);} 50%{opacity:1;transform:scale(1);} }
+  .tagline { color: var(--dim); font-size: 12px; }
+
+  .auth { display: flex; gap: 8px; align-items: center; }
+  .auth input {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+    font-family: inherit; font-size: 13px; padding: 9px 12px; border-radius: 8px;
+    width: 280px; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  .auth input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(46,230,214,.12); }
+  .btn {
+    background: linear-gradient(135deg, var(--cyan), #1ba89c); color: #04140f;
+    border: none; font-family: inherit; font-weight: 700; font-size: 13px;
+    padding: 9px 16px; border-radius: 8px; cursor: pointer; letter-spacing: .03em;
+    transition: transform .12s, box-shadow .12s;
+  }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(46,230,214,.25); }
+  .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); }
+  .btn.ghost:hover { color: var(--ink); border-color: var(--cyan); box-shadow: none; }
+
+  .status-line { font-size: 12px; color: var(--dim); margin: -10px 0 22px; min-height: 16px; }
+  .status-line .err { color: var(--crit); }
+  .status-line .live { color: var(--cyan); }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(4, 1fr); }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px;
+    position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; left: 0; top: 0; height: 2px; width: 100%;
+    background: linear-gradient(90deg, var(--cyan), transparent 70%);
+    opacity: .6;
+  }
+  .stat .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }
+  .stat .value { font-size: 30px; font-weight: 700; margin-top: 8px; }
+  .stat .sub { color: var(--dim); font-size: 11px; margin-top: 4px; }
+  .accent-c { color: var(--cyan); } .accent-m { color: var(--magenta); } .accent-a { color: var(--amber); }
+
+  section { margin-top: 30px; }
+  section > h2 {
+    font-family: "Major Mono Display", monospace; font-weight: 400; font-size: 15px;
+    color: var(--dim); letter-spacing: .08em; margin: 0 0 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section > h2::before { content: "▰"; color: var(--magenta); font-size: 10px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; font-weight: 400; }
+  td { font-size: 13px; }
+  tbody tr:hover { background: rgba(46,230,214,.04); }
+  .mono-key { color: var(--amber); }
+  .bar {
+    --pct: 0%; height: 7px; border-radius: 4px; background: var(--line);
+    position: relative; overflow: hidden; min-width: 90px;
+  }
+  .bar > i {
+    position: absolute; inset: 0; width: var(--pct);
+    background: linear-gradient(90deg, var(--cyan), var(--magenta));
+    border-radius: 4px; transition: width .4s ease;
+  }
+  .pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); }
+  .pill.on { color: var(--ok); border-color: rgba(46,230,214,.4); }
+  .pill.off { color: var(--dim); }
+
+  .config-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .cfg { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .cfg .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .cfg .v { margin-top: 4px; font-size: 14px; }
+
+  .empty { color: var(--dim); padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+  .gate { max-width: 520px; margin: 12vh auto; text-align: center; }
+  .gate p { color: var(--dim); }
+  .hidden { display: none !important; }
+  footer { margin-top: 50px; color: var(--dim); font-size: 11px; border-top: 1px solid var(--line); padding-top: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="dot"></span>
+      <div>
+        <h1>orkoprox</h1>
+        <div class="tagline">the switchboard · admin plane</div>
+      </div>
+    </div>
+    <div class="auth">
+      <input id="key" type="password" placeholder="admin api key" autocomplete="off" spellcheck="false" />
+      <button class="btn" id="connect">connect</button>
+      <button class="btn ghost hidden" id="refresh">refresh</button>
+    </div>
+  </header>
+
+  <div class="status-line" id="status">enter an admin key to view the control room.</div>
+
+  <div id="dash" class="hidden">
+    <div class="grid" id="cards"></div>
+
+    <section>
+      <h2>per-key budgets</h2>
+      <div id="keys"></div>
+    </section>
+
+    <section>
+      <h2>provider token usage · today</h2>
+      <div id="providers"></div>
+    </section>
+
+    <section>
+      <h2>configuration</h2>
+      <div class="config-grid" id="config"></div>
+    </section>
+  </div>
+
+  <div id="gate" class="gate">
+    <p>This page talks to the admin-plane API. Your key stays in the browser — it
+       is sent only as a bearer token to <code>/admin/stats</code>, never stored.</p>
+  </div>
+
+  <footer>orkoprox · self-hosted LLM gateway · MIT. Data shown is live from this instance.</footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let timer = null;
+
+function setStatus(msg, cls = "") {
+  $("status").innerHTML = cls ? `<span class="${cls}">${msg}</span>` : msg;
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function fetchStats(key) {
+  const res = await fetch("/admin/stats", { headers: { Authorization: "Bearer " + key } });
+  if (res.status === 401 || res.status === 403)
+    throw new Error("not authorised for the admin plane (" + res.status + ")");
+  if (!res.ok) throw new Error("stats request failed (" + res.status + ")");
+  return res.json();
+}
+
+function card(label, value, sub, accent) {
+  return `<div class="card stat"><div class="label">${esc(label)}</div>
+    <div class="value ${accent || ""}">${esc(value)}</div>
+    <div class="sub">${esc(sub || "")}</div></div>`;
+}
+
+function render(d) {
+  const keys = d.keys || [];
+  const cache = d.cache || {};
+  const totalReqMonth = keys.reduce((a, k) => a + (k.requests_month || 0), 0);
+  const totalTokMonth = keys.reduce((a, k) => a + (k.tokens_used_month || 0), 0);
+  const providers = Object.keys(d.provider_token_usage || {}).length;
+
+  $("cards").innerHTML =
+      card("active keys", keys.length, keys.filter(k => k.active).length + " active", "accent-c")
+    + card("requests · month", totalReqMonth.toLocaleString(), "across all keys", "accent-a")
+    + card("v-tokens · month", totalTokMonth.toLocaleString(), "weighted usage", "accent-m")
+    + card("cache hit rate", cache.enabled ? (cache.hit_rate * 100).toFixed(1) + "%" : "off",
+           cache.enabled ? cache.hits + " hits / " + cache.misses + " miss" : "semantic cache disabled",
+           cache.enabled ? "accent-c" : "");
+
+  // keys table
+  if (!keys.length) {
+    $("keys").innerHTML = `<div class="empty">No metered keys registered. Create one via POST /v1/admin/metering/keys.</div>`;
+  } else {
+    const rows = keys.map(k => {
+      const pct = Math.max(0, Math.min(100, k.monthly_usage_pct ?? k.usage_pct ?? 0));
+      const stClass = pct >= 95 ? "crit" : pct >= 80 ? "warn" : "ok";
+      return `<tr>
+        <td class="mono-key">${esc(k.api_key_prefix)}</td>
+        <td>${esc(k.tenant_id || "—")}</td>
+        <td>${esc(k.package || "—")}</td>
+        <td>${(k.tokens_used_month || 0).toLocaleString()} / ${(k.monthly_token_limit || 0).toLocaleString()}</td>
+        <td><div class="bar" style="--pct:${pct}%"><i></i></div></td>
+        <td style="color:var(--${stClass})">${pct}%</td>
+        <td>${k.active ? '<span class="pill on">active</span>' : '<span class="pill off">revoked</span>'}</td>
+      </tr>`;
+    }).join("");
+    $("keys").innerHTML = `<table><thead><tr>
+      <th>key</th><th>tenant</th><th>package</th><th>tokens · month</th><th>usage</th><th>%</th><th>state</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  // providers
+  const pu = d.provider_token_usage || {};
+  const pks = Object.keys(pu);
+  if (!pks.length) {
+    $("providers").innerHTML = `<div class="empty">No provider traffic recorded yet today.</div>`;
+  } else {
+    const rows = pks.map(p => {
+      const v = pu[p] || {};
+      return `<tr><td class="accent-c">${esc(p)}</td>
+        <td>${(v.prompt_tokens || 0).toLocaleString()}</td>
+        <td>${(v.completion_tokens || 0).toLocaleString()}</td>
+        <td>${((v.prompt_tokens||0)+(v.completion_tokens||0)).toLocaleString()}</td></tr>`;
+    }).join("");
+    $("providers").innerHTML = `<table><thead><tr>
+      <th>provider</th><th>prompt</th><th>completion</th><th>total</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  // config
+  const cfg = d.config || {};
+  const order = [
+    ["primary_provider", "primary provider"],
+    ["rate_limit_per_minute", "rate limit / min"],
+    ["rate_limit_concurrency", "concurrency limit"],
+    ["semantic_cache_enabled", "semantic cache"],
+    ["guard_enabled", "content guard"],
+    ["guard_hooks", "guard hooks"],
+    ["escalation_cascade", "escalation cascade"],
+    ["budget_degrade_alias", "budget degrade"],
+  ];
+  $("config").innerHTML = order.map(([k, label]) => {
+    let v = cfg[k];
+    if (v === true) v = "on"; else if (v === false) v = "off";
+    else if (v === "" || v == null) v = "—"; else if (v === 0) v = "off (0)";
+    return `<div class="cfg"><div class="k">${esc(label)}</div><div class="v">${esc(v)}</div></div>`;
+  }).join("");
+
+  setStatus("live · updated " + new Date().toLocaleTimeString(), "live");
+}
+
+async function connect() {
+  const key = $("key").value.trim();
+  if (!key) { setStatus("enter an admin key first.", "err"); return; }
+  setStatus("connecting…");
+  try {
+    const data = await fetchStats(key);
+    $("gate").classList.add("hidden");
+    $("dash").classList.remove("hidden");
+    $("refresh").classList.remove("hidden");
+    render(data);
+    if (timer) clearInterval(timer);
+    timer = setInterval(async () => {
+      try { render(await fetchStats(key)); }
+      catch (e) { setStatus(e.message, "err"); clearInterval(timer); }
+    }, 10000);
+  } catch (e) {
+    setStatus(e.message, "err");
+  }
+}
+
+$("connect").addEventListener("click", connect);
+$("refresh").addEventListener("click", connect);
+$("key").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+</script>
+</body>
+</html>

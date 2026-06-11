@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -23,7 +24,12 @@ from fastapi import (
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 
 from app.config import get_settings
 from app.errors import ProxyError
@@ -2162,6 +2168,53 @@ async def admin_reload_policy(
             "limits": len(policy_loader.policy.limits),
         }
     )
+
+
+@app.get("/admin/stats")
+async def admin_stats(
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Aggregated stats for the admin dashboard. Admin plane only.
+
+    Pulls together per-key usage, per-provider token usage, request counts,
+    semantic-cache hit rate, and rate-limit config — everything the built-in
+    dashboard renders, in one call. No full keys are ever returned.
+    """
+    enforce_admin_auth(settings, x_api_key, authorization)
+    return JSONResponse(
+        {
+            "keys": metering_service.list_all_keys(),
+            "provider_token_usage": metrics_store.get_provider_token_usage(),
+            "per_key_requests": metrics_store.get_per_key_request_counts(),
+            "cache": semantic_cache.stats(),
+            "config": {
+                "rate_limit_per_minute": settings.rate_limit_per_minute,
+                "rate_limit_concurrency": settings.rate_limit_concurrency,
+                "semantic_cache_enabled": settings.semantic_cache_enabled,
+                "guard_enabled": settings.guard_enabled,
+                "guard_hooks": settings.guard_hooks,
+                "primary_provider": settings.primary_provider,
+                "escalation_cascade": settings.escalation_cascade,
+                "budget_degrade_alias": settings.budget_degrade_alias,
+            },
+        }
+    )
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard() -> HTMLResponse:
+    """Serve the built-in admin dashboard (single self-contained HTML page).
+
+    The page itself is public HTML/JS; it asks for an admin key in the browser
+    and calls the admin-plane /admin/stats endpoint with it. No data is embedded
+    in the page — the API enforces auth.
+    """
+    html_path = Path(__file__).parent / "static" / "admin.html"
+    try:
+        return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    except OSError:
+        return HTMLResponse("<h1>orkoprox</h1><p>Admin dashboard asset missing.</p>", status_code=500)
 
 
 @app.post("/v1/admin/metering/keys")
