@@ -14,7 +14,7 @@ docker run --rm -p 8091:8091 \
   -e PROXY_API_KEYS=your-gateway-key-min-40-chars \
   -e OVH_API_KEY=YOUR_PROVIDER_API_KEY \
   -e OVH_BASE_URL=https://your-provider.example.com/v1 \
-  ghcr.io/truecode-org/orkoprox:latest
+  ghcr.io/novalis111/orkoprox:latest
 ```
 
 ```python
@@ -49,4 +49,4 @@ print(client.chat.completions.create(
 
 ## License
 
-MIT. See the [repository](https://github.com/truecode-org/orkoprox).
+MIT. See the [repository](https://github.com/novalis111/orkoprox).

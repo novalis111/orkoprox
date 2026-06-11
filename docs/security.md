@@ -34,5 +34,5 @@ from hammering the gateway.
 ## Reporting a vulnerability
 
 Please report security issues privately rather than opening a public issue.
-See [SECURITY.md](https://github.com/truecode-org/orkoprox/blob/main/SECURITY.md)
+See [SECURITY.md](https://github.com/novalis111/orkoprox/blob/main/SECURITY.md)
 in the repository for the disclosure policy and contact.

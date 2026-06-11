@@ -16,7 +16,7 @@ Thank you for considering a contribution. This document covers how to set up a d
 
 ```bash
 # Clone and enter the repo
-git clone https://github.com/truecode-org/orkoprox.git
+git clone https://github.com/novalis111/orkoprox.git
 cd orkoprox
 
 # Create a virtual environment

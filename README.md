@@ -10,7 +10,7 @@
 
 Point any OpenAI-compatible SDK at orkoprox instead of a cloud endpoint. Your keys stay on your infrastructure. Your prompts don't touch a third-party logging pipeline. Budget guardrails mean no surprise bills.
 
-[![CI](https://github.com/truecode-org/orkoprox/actions/workflows/ci.yml/badge.svg)](https://github.com/truecode-org/orkoprox/actions/workflows/ci.yml)
+[![CI](https://github.com/novalis111/orkoprox/actions/workflows/ci.yml/badge.svg)](https://github.com/novalis111/orkoprox/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker&logoColor=white)](Dockerfile)
@@ -38,7 +38,7 @@ docker run --rm \
   -e PROXY_API_KEYS=your-gateway-key-min-40-chars \
   -e OVH_API_KEY=YOUR_PROVIDER_API_KEY \
   -e OVH_BASE_URL=https://your-provider.example.com/v1 \
-  ghcr.io/truecode-org/orkoprox:latest
+  ghcr.io/novalis111/orkoprox:latest
 ```
 
 ### Call it like OpenAI
