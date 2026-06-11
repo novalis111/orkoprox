@@ -1,7 +1,10 @@
 # orkoprox
 
-<!-- mood image: see docs/assets/PROMPT.md -->
-![orkoprox](docs/assets/orkoprox-hero.png)
+<p align="center">
+  <img src="docs/assets/orkoprox-hero.png" alt="orkoprox — a hooded sorcerer working the magic switchboard that routes, meters, and caches LLM traffic" width="720">
+</p>
+
+<p align="center"><em>One switchboard for every model: route, meter, cache — without handing your keys to the cloud.</em></p>
 
 **The LLM gateway you can hand your provider keys to — secure by default, self-hosted, one container.**
 
