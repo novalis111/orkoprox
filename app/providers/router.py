@@ -145,6 +145,18 @@ class ProviderRegistry:
                 model=self.settings.reranker_model,
                 timeout_s=self.settings.reranker_timeout_s,
             )
+        # Custom OpenAI-compatible providers (Baseten, Groq, Together, …)
+        # registered via CUSTOM_PROVIDERS. Any OpenAI-API-shaped backend works
+        # without a code change.
+        custom = self.settings.custom_provider_configs().get(name)
+        if custom is not None:
+            return OpenAICompatibleProvider(
+                name=name,
+                base_url=custom["base_url"],
+                api_key=custom["api_key"],
+                default_model=custom["default_model"],
+                timeout_s=self.settings.request_timeout_seconds,
+            )
         return StubProvider()
 
     def get_provider(self, name: str) -> BaseProvider:
@@ -189,17 +201,19 @@ class ProviderRegistry:
         "report_structure",
     }
 
-    @staticmethod
-    def _route_key(raw_model: str) -> str:
+    def _route_key(self, raw_model: str) -> str:
         normalized = (raw_model or "").strip()
         alias = normalized.lower()
         if alias in ProviderRegistry._ALL_ALIASES:
             return alias
         if "/" in normalized:
             maybe_prefix, _ = normalized.split("/", 1)
-            if maybe_prefix in PROVIDER_ALIASES:
+            if maybe_prefix in PROVIDER_ALIASES or maybe_prefix in self._custom_provider_names():
                 return "prefixed"
         return "default"
+
+    def _custom_provider_names(self) -> set[str]:
+        return set(self.settings.custom_provider_configs().keys())
 
     def _resolve_route_decision(self, raw_model: str) -> _RouteDecision:
         normalized_raw = (raw_model or "").strip()

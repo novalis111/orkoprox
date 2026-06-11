@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Custom OpenAI-compatible providers** via `CUSTOM_PROVIDERS` (JSON): register
+  any number of additional backends — Baseten, Groq, Together, … — without a code
+  change. Usable in `PRIMARY_PROVIDER`, `FALLBACK_PROVIDERS`, and as a model-alias
+  prefix (`baseten/<model>`), exactly like the built-in providers.
+- **Dashboard smoke test**: a one-click "ask the switchboard" panel in `/admin`
+  that fires one real completion through routing → provider → model and shows the
+  answer, provider, model, latency and token usage. Empty prompt → the model tells
+  a one-liner about being a proxied LLM. Admin-plane only.
+
 ## [0.1.1]
 
 Hardening release — no breaking changes.

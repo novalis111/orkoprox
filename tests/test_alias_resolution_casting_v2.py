@@ -116,5 +116,6 @@ def test_resolve_reason_unchanged_after_casting_v2():
 
 
 def test_route_key_for_casting_v2_aliases():
+    registry = ProviderRegistry(settings=Settings())
     for alias in ("reason_lite", "long_context", "reason_mid"):
-        assert ProviderRegistry._route_key(alias) == alias
+        assert registry._route_key(alias) == alias

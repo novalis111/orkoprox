@@ -139,6 +139,43 @@ class Settings(BaseSettings):
     # Default-Modell wenn nichts spezifisch geroutet wird. Mistral-Small-3.2
     # ist Sweet-Spot: 131k ctx, Tool-Use, Visual, $0.10/$0.31 per M.
     ovh_model: str = "Mistral-Small-3.2-24B-Instruct-2506"
+
+    # ── Custom OpenAI-compatible providers (Baseten, Groq, Together, …) ──────
+    # Register any number of additional OpenAI-API-compatible backends without a
+    # code change. JSON object keyed by provider name; each value carries
+    # base_url, api_key and an optional default_model. Example:
+    #   CUSTOM_PROVIDERS='{"baseten":{"base_url":"https://inference.baseten.co/v1",
+    #     "api_key":"...","default_model":"nvidia/Nemotron-120B-A12B"},
+    #     "groq":{"base_url":"https://api.groq.com/openai/v1","api_key":"...",
+    #     "default_model":"llama-3.3-70b-versatile"}}'
+    # Names registered here are usable in PRIMARY_PROVIDER, FALLBACK_PROVIDERS,
+    # and as a model-alias prefix ("baseten/<model>"), exactly like ovh/mistral_lp.
+    custom_providers: str = ""
+
+    def custom_provider_configs(self) -> dict[str, dict[str, str]]:
+        """Parse CUSTOM_PROVIDERS JSON into a name -> {base_url, api_key,
+        default_model} mapping. Returns {} on empty/invalid input."""
+        raw = (self.custom_providers or "").strip()
+        if not raw:
+            return {}
+        import json
+
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        out: dict[str, dict[str, str]] = {}
+        if not isinstance(data, dict):
+            return {}
+        for name, cfg in data.items():
+            if not isinstance(cfg, dict) or not cfg.get("base_url"):
+                continue
+            out[str(name)] = {
+                "base_url": str(cfg.get("base_url", "")),
+                "api_key": str(cfg.get("api_key", "")),
+                "default_model": str(cfg.get("default_model", "")),
+            }
+        return out
     # Vision-Spezialmodell: Mistral-Small-3.2 ist nativ multimodal (Default).
     # Alias-Map: "vision" → ovh_vision_model, "vision_x" → ovh_vision_premium_model.
     # Mistral-Small-3.2: $0.10/$0.31, 131k ctx, Multimodal.

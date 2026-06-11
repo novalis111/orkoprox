@@ -2228,6 +2228,83 @@ async def admin_stats(
     )
 
 
+_SMOKE_DEFAULT_PROMPT = (
+    "You are an LLM running behind a gateway proxy. In one short, witty sentence, "
+    "tell a joke about being routed, rate-limited and cached by a proxy. Keep it light."
+)
+
+
+@app.post("/admin/smoke-test")
+async def admin_smoke_test(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Run one real chat completion through the gateway and report the result.
+
+    Admin plane only. Lets an operator confirm — in one click from the dashboard
+    — that routing, the provider connection and the model all actually work,
+    and get a one-liner joke back while doing it. Returns the answer plus the
+    provider, model, latency and token usage that served it.
+    """
+    enforce_admin_auth(settings, x_api_key, authorization)
+    try:
+        body = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        body = {}
+    prompt = (body.get("prompt") or "").strip() if isinstance(body, dict) else ""
+    model = (body.get("model") or "default").strip() if isinstance(body, dict) else "default"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt or _SMOKE_DEFAULT_PROMPT}],
+        "max_tokens": 120,
+    }
+    ctx = ProviderRequestContext(
+        request_id=str(request.state.request_id),
+        forward_headers={},
+        is_health_probe=False,
+    )
+    started = time.perf_counter()
+    try:
+        provider_name, resolved_model, data, _route_debug = (
+            await provider_registry.chat_completions(model, payload, ctx)
+        )
+    except ProviderError as exc:
+        err = _normalize_provider_error(exc)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": {"code": err.code, "message": err.message},
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+            },
+            status_code=200,
+        )
+    except ProxyError as err:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": {"code": err.code, "message": err.message},
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+            },
+            status_code=200,
+        )
+    answer = ""
+    try:
+        answer = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        answer = ""
+    return JSONResponse(
+        {
+            "ok": True,
+            "answer": answer,
+            "provider": provider_name,
+            "model": resolved_model,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "usage": data.get("usage") if isinstance(data, dict) else None,
+        }
+    )
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard() -> HTMLResponse:
     """Serve the built-in admin dashboard (single self-contained HTML page).

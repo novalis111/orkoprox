@@ -136,6 +136,16 @@
   .gate { max-width: 520px; margin: 12vh auto; text-align: center; }
   .gate p { color: var(--dim); }
   .hidden { display: none !important; }
+  .smoke-row { display: flex; gap: 10px; align-items: stretch; }
+  .smoke-row input { flex: 1; padding: 11px 14px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; color: var(--ink); font-size: 14px; }
+  .smoke-row input:focus { outline: none; border-color: var(--cyan); }
+  .smoke-out { margin-top: 14px; padding: 16px 18px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; }
+  .smoke-answer { font-size: 16px; line-height: 1.5; color: var(--ink); }
+  .smoke-answer.err { color: #ff6b6b; font-size: 14px; }
+  .smoke-meta { margin-top: 10px; font-size: 11px; color: var(--dim); letter-spacing: .02em; }
+  .muted { color: var(--dim); }
   footer { margin-top: 50px; color: var(--dim); font-size: 11px; border-top: 1px solid var(--line); padding-top: 16px; }
   @media (max-width: 760px) { .grid { grid-template-columns: repeat(2, 1fr); } }
 </style>
@@ -175,6 +185,20 @@
     <section>
       <h2>configuration</h2>
       <div class="config-grid" id="config"></div>
+    </section>
+
+    <section>
+      <h2>smoke test · ask the switchboard</h2>
+      <p class="sub" style="margin:0 0 .6rem 0;opacity:.7">
+        Fires one real completion through routing → provider → model. Leave the box empty
+        and it asks the model for a one-liner about being a proxied LLM. Good for a quick
+        "is it actually live?" — with a punchline.</p>
+      <div class="smoke-row">
+        <input id="smokePrompt" type="text" autocomplete="off" spellcheck="false"
+               placeholder="optional prompt — empty = tell me a proxy joke" />
+        <button class="btn" id="smokeBtn">run</button>
+      </div>
+      <div id="smokeOut" class="smoke-out hidden"></div>
     </section>
   </div>
 
@@ -306,9 +330,48 @@ async function connect() {
   }
 }
 
+async function runSmokeTest() {
+  const key = $("key").value.trim();
+  if (!key) { setStatus("enter an admin key first.", "err"); return; }
+  const prompt = $("smokePrompt").value.trim();
+  const out = $("smokeOut");
+  out.classList.remove("hidden");
+  out.innerHTML = `<span class="muted">dialling the switchboard…</span>`;
+  $("smokeBtn").disabled = true;
+  try {
+    const res = await fetch("/admin/smoke-test", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify(prompt ? { prompt } : {}),
+    });
+    if (res.status === 401 || res.status === 403) throw new Error("not authorised (" + res.status + ")");
+    const d = await res.json();
+    if (d.ok) {
+      const u = d.usage || {};
+      out.innerHTML =
+        `<div class="smoke-answer">${esc(d.answer || "(empty response)")}</div>
+         <div class="smoke-meta">
+           <span class="accent-c">${esc(d.provider)}</span> ·
+           <span>${esc(d.model)}</span> ·
+           <span>${d.latency_ms} ms</span> ·
+           <span>${(u.total_tokens || 0)} tok</span>
+         </div>`;
+    } else {
+      out.innerHTML = `<div class="smoke-answer err">✗ ${esc(d.error?.code || "error")}: ${esc(d.error?.message || "")}</div>
+        <div class="smoke-meta">${d.latency_ms} ms — check provider keys / routing</div>`;
+    }
+  } catch (e) {
+    out.innerHTML = `<div class="smoke-answer err">✗ ${esc(e.message)}</div>`;
+  } finally {
+    $("smokeBtn").disabled = false;
+  }
+}
+
 $("connect").addEventListener("click", connect);
 $("refresh").addEventListener("click", connect);
 $("key").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+$("smokeBtn").addEventListener("click", runSmokeTest);
+$("smokePrompt").addEventListener("keydown", (e) => { if (e.key === "Enter") runSmokeTest(); });
 </script>
 </body>
 </html>

@@ -163,8 +163,9 @@ def test_resolve_reason_unchanged_to_gpt_oss_120b():
 
 
 def test_route_key_for_new_aliases():
+    registry = ProviderRegistry(settings=Settings())
     for alias in ("vision_x", "image", "voice", "voice_hq"):
-        assert ProviderRegistry._route_key(alias) == alias
+        assert registry._route_key(alias) == alias
 
 
 def test_route_key_for_dalle_maps_via_openai_compat():
@@ -172,4 +173,5 @@ def test_route_key_for_dalle_maps_via_openai_compat():
     OPENAI_COMPAT_MODEL_ALIASES auf "image"."""
     # Direkt _route_key gibt "default" zurueck — Resolution erfolgt erst in
     # _resolve_route_decision via OPENAI_COMPAT_MODEL_ALIASES.
-    assert ProviderRegistry._route_key("dall-e-3") == "default"
+    registry = ProviderRegistry(settings=Settings())
+    assert registry._route_key("dall-e-3") == "default"
