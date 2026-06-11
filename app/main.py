@@ -48,6 +48,12 @@ from app.admin_auth import enforce_admin_auth
 from app.audit_log import AuditLog, mask_key
 from app.rate_limit import RateLimiter
 from app.policy import PolicyLoader, apply_policy_to_settings
+from app.compat import (
+    anthropic_to_openai,
+    ollama_to_openai,
+    openai_to_anthropic,
+    openai_to_ollama,
+)
 
 
 settings = get_settings()
@@ -233,7 +239,11 @@ def _enforce_internal_auth(x_api_key: str | None, authorization: str | None) -> 
 
 
 def _enforce_metering_budget(api_key: str | None) -> None:
-    """Check token budget for metered keys. Raises 429 if exceeded."""
+    """Check token budget for metered keys. Raises 429 if exceeded.
+
+    Hard-stop variant used by endpoints without a degrade path (embeddings,
+    rerank, audio, image, vision).
+    """
     if not api_key or not metering_service.enabled:
         return
     allowed, config, usage = metering_service.check_budget(api_key)
@@ -252,10 +262,57 @@ def _enforce_metering_budget(api_key: str | None) -> None:
         )
 
 
+def _budget_degrade_or_enforce(api_key: str | None) -> str | None:
+    """Budget guardrail with optional graceful degrade (F4).
+
+    Returns a model alias to downgrade to when the key's budget is exhausted and
+    BUDGET_DEGRADE_ALIAS is configured; returns None when the budget is fine or
+    metering is off. Raises 429 (or 403 for a revoked key) when the budget is
+    exhausted and no degrade alias is set — the existing hard-stop behaviour.
+    """
+    if not api_key or not metering_service.enabled:
+        return None
+    allowed, config, usage = metering_service.check_budget(api_key)
+    if allowed:
+        return None
+    if config and not config.active:
+        raise ProxyError(
+            http_status=403, code="key_revoked", message="API key has been revoked"
+        )
+    degrade = settings.budget_degrade_alias.strip()
+    if degrade:
+        return degrade
+    limit = config.daily_token_limit if config else 0
+    raise ProxyError(
+        http_status=429,
+        code="token_budget_exceeded",
+        message=f"Daily token budget exceeded ({usage.total_tokens}/{limit}). Resets at midnight UTC.",
+    )
+
+
 def _extract_usage_from_response(data: dict[str, Any]) -> tuple[int, int]:
     """Extract token counts from OpenAI-compatible response."""
     usage = data.get("usage", {})
     return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+
+
+def _is_empty_chat_response(data: dict[str, Any]) -> bool:
+    """True if a chat completion carries no usable assistant content.
+
+    Used by the escalation cascade to decide whether to try the next tier.
+    A response with tool calls counts as usable even when content is empty.
+    """
+    try:
+        choices = data.get("choices") or []
+        if not choices:
+            return True
+        message = choices[0].get("message") or {}
+        if message.get("tool_calls"):
+            return False
+        content = message.get("content")
+        return not (content and str(content).strip())
+    except (AttributeError, IndexError, TypeError):
+        return True
 
 
 def _track_provider_usage(
@@ -980,9 +1037,25 @@ async def chat_completions(
     authorization: str | None = Header(default=None),
 ):
     auth_key = _enforce_internal_auth(x_api_key, authorization)
-    _enforce_metering_budget(auth_key)
+    _budget_degrade_alias = _budget_degrade_or_enforce(auth_key)
 
     payload: dict[str, Any] = body.model_dump(by_alias=True, exclude_none=True)
+    # F4 graceful degrade: budget exhausted + a degrade alias is configured →
+    # route this request to the cheaper alias instead of returning 429.
+    if _budget_degrade_alias:
+        payload["model"] = _budget_degrade_alias
+    # F8 escalation cascade: a request addressed to the trigger model walks the
+    # configured tier list, stopping at the first usable answer.
+    _cascade_tiers: list[str] = []
+    if (
+        not _budget_degrade_alias
+        and payload.get("model") == settings.escalation_trigger_model
+        and settings.escalation_cascade_tiers
+    ):
+        _cascade_tiers = settings.escalation_cascade_tiers
+        payload["model"] = _cascade_tiers[0]
+    # The model actually routed (may differ from body.model after F4/F8 above).
+    effective_model = payload.get("model", body.model)
     # Messages need special serialization: assistant messages with tool_calls
     # MUST include content=null (OpenAI spec), so exclude_none would break them.
     serialized_messages = []
@@ -1080,7 +1153,7 @@ async def chat_completions(
             # der erste Chunk kommt erst beim ersten async-for. Setup-Latenz
             # (TLS-Handshake + Initial-Request) laeuft parallel zum Pre-Guard.
             stream_setup_task = asyncio.create_task(
-                provider_registry.chat_completions_stream(body.model, payload, ctx)
+                provider_registry.chat_completions_stream(effective_model, payload, ctx)
             )
             pre_decision = await _await_pre_decision()
             if pre_decision is not None and pre_decision.is_blocked:
@@ -1293,7 +1366,7 @@ async def chat_completions(
         # Provider-Task starten BEVOR Pre-Decision-Wait, damit beide parallel laufen.
         # Bei Pre-Block: Provider-Task canceln (CancelledError silent verschlucken).
         provider_task = asyncio.create_task(
-            provider_registry.chat_completions(body.model, payload, ctx)
+            provider_registry.chat_completions(effective_model, payload, ctx)
         )
         pre_decision = await _await_pre_decision()
         if pre_decision is not None and pre_decision.is_blocked:
@@ -1310,6 +1383,24 @@ async def chat_completions(
             data,
             route_debug,
         ) = await provider_task
+
+        # F8 — escalation cascade (non-stream only): if the first tier errored or
+        # produced no usable content, walk the remaining tiers in order and stop
+        # at the first usable answer. Stream requests use the first tier only
+        # (a delivered stream cannot be retried).
+        escalated_via: list[str] = []
+        if _cascade_tiers:
+            for next_tier in _cascade_tiers[1:]:
+                if not _is_empty_chat_response(data):
+                    break
+                escalated_via.append(next_tier)
+                payload["model"] = next_tier
+                try:
+                    provider_name, resolved_model, data, route_debug = (
+                        await provider_registry.chat_completions(next_tier, payload, ctx)
+                    )
+                except ProviderError:
+                    continue
         elapsed_ms = (time.perf_counter() - started) * 1000
         metrics_store.record(provider_name, resolved_model, 200, False, elapsed_ms)
         _record_fallback_if_needed(provider_name, route_debug)
@@ -1403,6 +1494,12 @@ async def chat_completions(
                 guard_pre_parallel_saving_ms=saving_ms,
             )
         resp = JSONResponse(_sanitize_tool_calls(data))
+        # F4: signal a budget-driven downgrade so clients can detect it.
+        if _budget_degrade_alias:
+            resp.headers[f"{_HP}-Budget-Degraded"] = _budget_degrade_alias
+        # F8: report which tier the cascade settled on (if it escalated).
+        if escalated_via:
+            resp.headers[f"{_HP}-Escalated-To"] = resolved_model
         if guard_blocked_post and post_decision:
             resp.headers[f"{_HP}-Guard-Blocked"] = "post"
             resp.headers[f"{_HP}-Guard-Category"] = (
@@ -2021,3 +2118,198 @@ async def admin_get_tenant_usage(
             result["package"] = config.package
             break
     return JSONResponse(result)
+
+
+# ── F7: Drop-in Compatibility Endpoints ──────────────────────────────────────
+#
+# These endpoints let existing Anthropic-SDK and Ollama clients point at
+# orkoprox without changing their wire shape.  Only non-streaming is supported
+# in v0.1; stream=true returns HTTP 400 with a clear message.
+
+
+@app.post("/v1/messages")
+async def compat_anthropic_messages(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Anthropic Messages-API compatibility endpoint (F7).
+
+    Accepts an Anthropic Messages-API request body, translates it to the
+    OpenAI Chat Completions format used internally, calls the provider
+    registry, and returns an Anthropic-shaped response.
+
+    Streaming (stream=true) is not yet supported on this endpoint and returns
+    HTTP 400.  Use the native /v1/chat/completions endpoint for streaming.
+
+    Auth, rate-limiting, and budget enforcement are identical to the native
+    endpoint.
+    """
+    auth_key = _enforce_internal_auth(x_api_key, authorization)
+    _enforce_metering_budget(auth_key)
+
+    body = await request.json()
+
+    if body.get("stream", False):
+        raise ProxyError(
+            http_status=400,
+            code="streaming_not_supported",
+            message=(
+                "streaming is not yet supported on the compatibility endpoint "
+                "/v1/messages — use /v1/chat/completions with stream=true instead"
+            ),
+        )
+
+    translated = anthropic_to_openai(body)
+    ctx = _make_request_context(request)
+    started = time.perf_counter()
+
+    try:
+        provider_name, resolved_model, data, route_debug = (
+            await provider_registry.chat_completions(translated["model"], translated, ctx)
+        )
+    except ProviderError as exc:
+        err = _normalize_provider_error(exc)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        metrics_store.record("none", translated.get("model", ""), err.http_status, False, elapsed_ms)
+        log_event(
+            logger,
+            "request_failed",
+            request_id=ctx.request_id,
+            path="/v1/messages",
+            provider="none",
+            model=translated.get("model", ""),
+            latency_ms=int(elapsed_ms),
+            status_code=err.http_status,
+        )
+        raise err
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    metrics_store.record(provider_name, resolved_model, 200, False, elapsed_ms)
+
+    prompt_t, completion_t = _extract_usage_from_response(data)
+    _track_provider_usage(provider_name, prompt_t, completion_t, auth_key)
+
+    usage_after = None
+    if auth_key and metering_service.enabled:
+        if prompt_t > 0 or completion_t > 0:
+            usage_after = metering_service.record_usage(
+                auth_key,
+                prompt_tokens=prompt_t,
+                completion_tokens=completion_t,
+                model=resolved_model,
+                provider=provider_name,
+            )
+
+    log_event(
+        logger,
+        "request_completed",
+        request_id=ctx.request_id,
+        path="/v1/messages",
+        provider=provider_name,
+        raw_model=body.get("model", ""),
+        model=resolved_model,
+        latency_ms=int(elapsed_ms),
+        status_code=200,
+        stream=False,
+        route_debug=route_debug,
+    )
+
+    anthropic_resp = openai_to_anthropic(data, resolved_model)
+    resp = JSONResponse(anthropic_resp)
+    resp.headers[f"{_HP}-Compat"] = "anthropic"
+    return _add_metering_headers(resp, auth_key, usage_after)
+
+
+@app.post("/api/chat")
+async def compat_ollama_chat(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Ollama /api/chat compatibility endpoint (F7).
+
+    Accepts an Ollama /api/chat request body, translates it to the OpenAI
+    Chat Completions format used internally, calls the provider registry, and
+    returns an Ollama-shaped response.
+
+    Streaming (stream=true) is not yet supported on this endpoint and returns
+    HTTP 400.  Use the native /v1/chat/completions endpoint for streaming.
+
+    Auth, rate-limiting, and budget enforcement are identical to the native
+    endpoint.
+    """
+    auth_key = _enforce_internal_auth(x_api_key, authorization)
+    _enforce_metering_budget(auth_key)
+
+    body = await request.json()
+
+    if body.get("stream", False):
+        raise ProxyError(
+            http_status=400,
+            code="streaming_not_supported",
+            message=(
+                "streaming is not yet supported on the compatibility endpoint "
+                "/api/chat — use /v1/chat/completions with stream=true instead"
+            ),
+        )
+
+    translated = ollama_to_openai(body)
+    ctx = _make_request_context(request)
+    started = time.perf_counter()
+
+    try:
+        provider_name, resolved_model, data, route_debug = (
+            await provider_registry.chat_completions(translated["model"], translated, ctx)
+        )
+    except ProviderError as exc:
+        err = _normalize_provider_error(exc)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        metrics_store.record("none", translated.get("model", ""), err.http_status, False, elapsed_ms)
+        log_event(
+            logger,
+            "request_failed",
+            request_id=ctx.request_id,
+            path="/api/chat",
+            provider="none",
+            model=translated.get("model", ""),
+            latency_ms=int(elapsed_ms),
+            status_code=err.http_status,
+        )
+        raise err
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    metrics_store.record(provider_name, resolved_model, 200, False, elapsed_ms)
+
+    prompt_t, completion_t = _extract_usage_from_response(data)
+    _track_provider_usage(provider_name, prompt_t, completion_t, auth_key)
+
+    usage_after = None
+    if auth_key and metering_service.enabled:
+        if prompt_t > 0 or completion_t > 0:
+            usage_after = metering_service.record_usage(
+                auth_key,
+                prompt_tokens=prompt_t,
+                completion_tokens=completion_t,
+                model=resolved_model,
+                provider=provider_name,
+            )
+
+    log_event(
+        logger,
+        "request_completed",
+        request_id=ctx.request_id,
+        path="/api/chat",
+        provider=provider_name,
+        raw_model=body.get("model", ""),
+        model=resolved_model,
+        latency_ms=int(elapsed_ms),
+        status_code=200,
+        stream=False,
+        route_debug=route_debug,
+    )
+
+    ollama_resp = openai_to_ollama(data, resolved_model)
+    resp = JSONResponse(ollama_resp)
+    resp.headers[f"{_HP}-Compat"] = "ollama"
+    return _add_metering_headers(resp, auth_key, usage_after)

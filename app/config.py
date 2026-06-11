@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     audit_log_enabled: bool = False
     audit_log_path: str = "/tmp/orkoprox-audit.jsonl"
 
+    # ── Budget guardrails: graceful degrade (F4) ──────────────────────────
+    # When a key exhausts its budget, the default behaviour is a hard 429. If
+    # BUDGET_DEGRADE_ALIAS is set (e.g. "low"), the request is instead routed to
+    # that cheaper alias so the caller keeps working instead of failing — the
+    # response carries a {prefix}-Budget-Degraded header so clients can tell.
+    budget_degrade_alias: str = ""
+
+    # ── Server-side escalation cascade (F8) ────────────────────────────────
+    # A request with model == ESCALATION_TRIGGER_MODEL walks ESCALATION_CASCADE
+    # tier by tier: the gateway tries each alias in order and stops at the first
+    # that returns a usable answer. Lets one request escalate by complexity /
+    # on failure without the client orchestrating it.
+    escalation_trigger_model: str = "auto"
+    escalation_cascade: str = ""
+
     # ── Declarative policy file (TOML, optional, hot-reloaded) ─────────────
     # Point this at an orkoprox.toml to set routing aliases + limits + quota
     # defaults in one versionable file instead of many env vars. Empty = pure
@@ -278,6 +293,11 @@ class Settings(BaseSettings):
     def admin_keys(self) -> set[str]:
         """Keys allowed on the admin plane (/v1/admin/*). Strictly separate."""
         return {x.strip() for x in self.admin_api_keys.split(",") if x.strip()}
+
+    @property
+    def escalation_cascade_tiers(self) -> list[str]:
+        """Ordered tier aliases the escalation cascade walks (empty = disabled)."""
+        return [x.strip() for x in self.escalation_cascade.split(",") if x.strip()]
 
     @property
     def guard_bypass_key_set(self) -> set[str]:

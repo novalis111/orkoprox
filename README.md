@@ -81,6 +81,9 @@ The `model` field accepts both raw provider model names and **tier/task aliases*
 - **OpenAI-compatible API** — `/v1/chat/completions` (JSON + SSE streaming, tool calls, vision), `/v1/embeddings`, `/v1/audio/transcriptions`, `/v1/images/generations`, `/v1/rerank`
 - **Tier/task alias routing** — send `model="chat"` or `model="reason"` and orkoprox resolves it to the right provider/model. No SDK changes needed when you swap backends.
 - **Fallback chain + provider cooldown** — if the primary backend is unhealthy, traffic shifts to the fallback automatically. Cooldown windows prevent thundering-herd retries.
+- **Budget guardrails with graceful degrade** — when a key runs out of budget, optionally downgrade to a cheaper tier instead of returning a hard 429. No surprise outage *or* surprise bill.
+- **Server-side escalation cascade** — send `model="auto"` and the gateway walks a configured tier list (e.g. `low → chat → xhigh`), stopping at the first usable answer.
+- **Drop-in compatibility endpoints** — point Anthropic (`POST /v1/messages`) or Ollama (`POST /api/chat`) clients at orkoprox unchanged; it translates the wire format both ways.
 - **Per-key quotas** — daily and monthly budget limits per API key. Token weighting makes expensive models consume more "virtual tokens" so you control costs accurately.
 - **Cost tracking** — EUR/USD cost attribution per request and per key. Quota-status headers (`X-Orkoprox-Quota-Status: ok|warn|critical|exceeded`) on every response.
 - **Content moderation guard** — pluggable pre/post filter (fail-open configurable). Built for EU AI Act compliance.
@@ -117,6 +120,8 @@ Copy `.env.example` to `.env` and edit. All settings are environment variables.
 | `RATE_LIMIT_PER_MINUTE` | `0` | Per-key request rate limit (0 = off) |
 | `RATE_LIMIT_CONCURRENCY` | `0` | Per-key in-flight request limit (0 = off) |
 | `AUDIT_LOG_ENABLED` | `false` | Append-only audit log (key prefixes only, never prompt content) |
+| `BUDGET_DEGRADE_ALIAS` | _(optional)_ | On budget exhaustion, downgrade to this alias instead of 429 |
+| `ESCALATION_CASCADE` | _(optional)_ | Comma-separated tiers walked by `model="auto"` (e.g. `low,chat,xhigh`) |
 | `ALERT_TELEGRAM_BOT_TOKEN` | _(optional)_ | Telegram bot token for alerting |
 | `ALERT_TELEGRAM_CHAT_ID` | _(optional)_ | Telegram chat/channel ID for alerts |
 
@@ -160,10 +165,8 @@ When Redis is configured, orkoprox tracks spend per API key.
 
 These features are planned and in progress — not yet in the current release:
 
-- **Budget graceful degrade** — instead of a hard 429, downgrade to a cheaper model tier before rejecting.
-- **Server-side escalation cascade** — automatic quality-tier escalation with cost cap.
 - **Semantic cache** — deduplicate semantically equivalent requests to cut costs.
-- **Anthropic / Ollama compat shapes** — first-class support for non-OpenAI provider wire formats.
+- **Streaming on the compatibility endpoints** — the Anthropic/Ollama endpoints are non-streaming for now.
 - **Built-in admin dashboard** — lightweight web UI for quota inspection and key management.
 
 ---

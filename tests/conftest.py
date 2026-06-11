@@ -16,6 +16,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FALLBACK_PROVIDERS", "mock")
     monkeypatch.setenv("PROXY_API_KEYS", "test-key")
     monkeypatch.setenv("METRICS_ENABLED", "true")
+    # Ensure metering service is not Redis-backed in tests (no Redis in CI).
+    # Without this, any shell environment with REDIS_URL set causes metering
+    # to init a Redis client that immediately connection-errors on first call.
+    monkeypatch.delenv("REDIS_URL", raising=False)
 
     import app.config
     import app.main
@@ -40,5 +44,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         "FALLBACK_PROVIDERS",
         "PROXY_API_KEYS",
         "METRICS_ENABLED",
+        "REDIS_URL",
     ]:
         os.environ.pop(key, None)
