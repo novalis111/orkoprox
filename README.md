@@ -20,7 +20,8 @@ Point any OpenAI-compatible SDK at orkoprox instead of a cloud endpoint. Your ke
 ## Why orkoprox
 
 - **Secure by default** — your provider keys never leave your infrastructure; no phone-home telemetry, no third-party logging of your prompts.
-- **One container** — `docker run` and you're live. Redis is optional; quota features activate when it's present.
+- **One container, zero config** — `docker run` and you're live. No Redis required: per-key quotas and metering fall back to an in-process store. Add Redis only when you want shared/persistent state.
+- **Config as a file** — routing aliases, rate limits, and quotas live in one versionable TOML policy, hot-reloadable without a restart. GitOps-friendly.
 - **True drop-in** — any OpenAI-compatible SDK or tool works unmodified. Just change the `base_url`.
 - **Budget guardrails** — per-key daily and monthly limits with cost tracking so a runaway script can't rack up a surprise bill.
 - **EU-friendly** — designed for self-hosted deployments in your own data center or cloud region. No data residency surprises.
@@ -105,7 +106,8 @@ Copy `.env.example` to `.env` and edit. All settings are environment variables.
 | `OVH_API_KEY` | _(required)_ | API key for your primary provider |
 | `OVH_BASE_URL` | _(required)_ | Base URL of your primary provider's OpenAI-compatible API |
 | `FALLBACK_PROVIDERS` | `ovh` | Comma-separated fallback chain (the `stub` provider returns 503, useful for tests) |
-| `REDIS_URL` | _(optional)_ | Redis connection string — enables per-key quotas and health caching |
+| `REDIS_URL` | _(optional)_ | Redis connection string. **Optional** — without it, metering uses an in-process store (resets on restart) |
+| `POLICY_FILE` | _(optional)_ | Path to a TOML policy (aliases + limits + quotas). Hot-reloadable via the admin API |
 | `GUARD_ENABLED` | `true` | Enable content moderation pre/post filter |
 | `GUARD_BYPASS_KEYS` | _(optional)_ | Keys that skip the guard (internal service accounts) |
 | `METRICS_ENABLED` | `true` | Expose `/metrics` Prometheus endpoint |
@@ -158,8 +160,6 @@ When Redis is configured, orkoprox tracks spend per API key.
 
 These features are planned and in progress — not yet in the current release:
 
-- **Redis-optional mode** — SQLite or in-memory fallback so Redis is never a hard dependency.
-- **Declarative YAML/TOML policy** — routing rules, quotas, and guard config as files with hot-reload.
 - **Budget graceful degrade** — instead of a hard 429, downgrade to a cheaper model tier before rejecting.
 - **Server-side escalation cascade** — automatic quality-tier escalation with cost cap.
 - **Semantic cache** — deduplicate semantically equivalent requests to cut costs.

@@ -48,6 +48,17 @@ class RateLimiter:
         self._buckets: dict[str, _Bucket] = {}
         self._inflight: dict[str, int] = {}
 
+    def reconfigure(self, *, per_minute: int, burst: int, concurrency: int) -> None:
+        """Apply new limits at runtime (e.g. after a policy reload).
+
+        Existing buckets/in-flight counters are kept; only the rates change.
+        """
+        with self._lock:
+            self._per_minute = max(0, per_minute)
+            self._capacity = float(burst if burst > 0 else per_minute)
+            self._refill_per_sec = self._per_minute / 60.0 if self._per_minute else 0.0
+            self._concurrency = max(0, concurrency)
+
     @property
     def rate_enabled(self) -> bool:
         return self._per_minute > 0

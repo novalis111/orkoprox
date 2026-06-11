@@ -9,7 +9,6 @@ Wir testen drei Pfade:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -144,19 +143,12 @@ class TestRecordUsageCost:
     """Cost-Metering muss auch bei Proxy-Alias-Modellen persistieren."""
 
     def test_record_usage_writes_cost_micro_usd_for_chat_alias(self) -> None:
-        redis = MagicMock()
-        pipe = MagicMock()
-        pipe.execute.return_value = [
-            1000, 500, 1500, 1, 255,
-            True,
-            1000, 500, 1500, 1, 255,
-            True,
-        ]
-        redis.pipeline.return_value = pipe
-        redis.hget.side_effect = lambda _key, field: 255 if field == "cost_micro_usd" else 0
-        redis.get.return_value = None
+        # Use the real in-memory store so we test the actual behaviour rather
+        # than a backend-specific protocol mock.
+        from app.storage import MemoryStore
 
-        svc = TokenMeteringService(redis_client=redis)
+        store = MemoryStore()
+        svc = TokenMeteringService(store=store)
         usage = svc.record_usage(
             "test_key",
             prompt_tokens=1000,
@@ -165,10 +157,11 @@ class TestRecordUsageCost:
             provider="ovh",
         )
 
-        assert usage.cost_micro_usd == 255
-        cost_calls = [
-            c for c in pipe.hincrby.call_args_list
-            if len(c.args) >= 2 and c.args[1] == "cost_micro_usd"
-        ]
-        assert len(cost_calls) == 2
-        assert all(c.args[2] > 0 for c in cost_calls)
+        # A priced OVH chat call must persist a positive cost in microcents,
+        # and it must land in BOTH the daily and monthly windows.
+        assert usage.cost_micro_usd > 0
+        daily = svc.get_daily_usage("test_key")
+        monthly = svc.get_monthly_usage("test_key")
+        assert daily.cost_micro_usd == usage.cost_micro_usd
+        assert monthly.cost_micro_usd == usage.cost_micro_usd
+        assert daily.total_tokens == monthly.total_tokens > 0

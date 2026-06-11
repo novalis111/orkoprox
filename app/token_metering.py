@@ -28,7 +28,10 @@ import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.storage import KeyValueStore
 
 logger = logging.getLogger(__name__)
 
@@ -221,9 +224,22 @@ class TokenMeteringService:
     """Per-key token metering with Redis backend."""
 
     def __init__(
-        self, redis_client: Any | None = None, header_prefix: str = "X-Orkoprox"
+        self,
+        redis_client: Any | None = None,
+        header_prefix: str = "X-Orkoprox",
+        store: "KeyValueStore | None" = None,
     ) -> None:
-        self._redis = redis_client
+        # Storage backend: an explicit store wins; else a Redis client wraps to
+        # RedisStore; else the Zero-Config in-memory fallback. Metering always
+        # works — Redis is optional (state just resets on restart in-memory).
+        from app.storage import MemoryStore, RedisStore
+
+        if store is not None:
+            self._store: KeyValueStore = store
+        elif redis_client is not None:
+            self._store = RedisStore(redis_client)
+        else:
+            self._store = MemoryStore()
         # Namespace for all usage/quota response headers (e.g. "X-Orkoprox" →
         # "X-Orkoprox-Usage-Pct"). Configurable so deployments can rebrand the
         # gateway's response headers without code changes.
@@ -233,20 +249,19 @@ class TokenMeteringService:
         self._config_cache: dict[str, KeyConfig] = {}
         # Negative-Cache: (api_key) -> monotonic_timestamp des Lookup-Misses.
         # Bei Lookup pruefen ob Eintrag aelter als NEGATIVE_CACHE_TTL_S — wenn
-        # ja, Redis erneut fragen (key existiert evtl. mittlerweile via Cross-
+        # ja, Store erneut fragen (key existiert evtl. mittlerweile via Cross-
         # Process-Bootstrap).
         self._negative_cache: dict[str, float] = {}
 
     @property
     def enabled(self) -> bool:
-        return self._redis is not None
+        # Metering is always available now (in-memory fallback when no Redis).
+        return True
 
     def register_key(self, api_key: str, config: KeyConfig) -> None:
         """Register or update a metered API key."""
-        if not self._redis:
-            return
-        redis_key = f"{CONFIG_KEY_PREFIX}:{api_key}"
-        self._redis.set(redis_key, json.dumps(config.to_dict()))
+        store_key = f"{CONFIG_KEY_PREFIX}:{api_key}"
+        self._store.set_str(store_key, json.dumps(config.to_dict()))
         self._config_cache[api_key] = config
         # Negative-Cache invalidieren — wenn vorher ein Miss gecached war,
         # ist er jetzt obsolet (wir haben gerade den Key geschrieben).
@@ -260,8 +275,6 @@ class TokenMeteringService:
 
     def revoke_key(self, api_key: str) -> None:
         """Deactivate a metered API key."""
-        if not self._redis:
-            return
         config = self.get_key_config(api_key)
         if config:
             config.active = False
@@ -277,10 +290,8 @@ class TokenMeteringService:
         2. Negative-Cache (self._negative_cache): Hit + nicht abgelaufen →
            sofortiger None-Return. Hit + abgelaufen → Eintrag wird verworfen,
            Redis erneut gefragt.
-        3. Redis-Miss → in Negative-Cache mit monotonic_timestamp.
+        3. Store-Miss → in Negative-Cache mit monotonic_timestamp.
         """
-        if not self._redis:
-            return None
         if api_key in self._config_cache:
             return self._config_cache[api_key]
         # Negative-Cache mit TTL pruefen
@@ -288,11 +299,11 @@ class TokenMeteringService:
         if neg_ts is not None:
             if (time.monotonic() - neg_ts) < NEGATIVE_CACHE_TTL_S:
                 return None
-            # TTL abgelaufen: Eintrag verwerfen, Redis erneut fragen
+            # TTL abgelaufen: Eintrag verwerfen, Store erneut fragen
             self._negative_cache.pop(api_key, None)
 
-        redis_key = f"{CONFIG_KEY_PREFIX}:{api_key}"
-        raw = self._redis.get(redis_key)
+        store_key = f"{CONFIG_KEY_PREFIX}:{api_key}"
+        raw = self._store.get_str(store_key)
         if not raw:
             self._negative_cache[api_key] = time.monotonic()
             return None
@@ -361,16 +372,14 @@ class TokenMeteringService:
 
         Wenn provider="ovh" ODER Modell in OVH_MODEL_PRICING_USD/
         OVH_AUDIO_PRICING_USD steht, berechnen wir Microcents und
-        persistieren sie redis-seitig. Microcents auf naechsten microcent
+        persistieren sie im Store. Microcents auf naechsten microcent
         aufgerundet, damit Sub-Penny-Calls nicht im 0-Drift verschwinden.
         """
-        if not self._redis:
-            return DailyUsage()
         now = datetime.now(UTC)
         today = now.strftime("%Y-%m-%d")
         month = now.strftime("%Y-%m")
-        redis_key = f"{USAGE_KEY_PREFIX}:{api_key}:{today}"
-        monthly_key = f"{USAGE_KEY_PREFIX}:{api_key}:{month}"
+        daily_store_key = f"{USAGE_KEY_PREFIX}:{api_key}:{today}"
+        monthly_store_key = f"{USAGE_KEY_PREFIX}:{api_key}:{month}"
 
         from app.providers.ovh_pricing import (
             OVH_AUDIO_PRICING_USD,
@@ -429,44 +438,29 @@ class TokenMeteringService:
 
             microcents = max(1, math.ceil(usd * 1_000_000)) if usd > 0 else 0
 
-        # Atomic increment via pipeline (daily + monthly parallel)
-        pipe = self._redis.pipeline()
-        # Daily
-        pipe.hincrby(redis_key, "prompt_tokens", prompt_tokens)
-        pipe.hincrby(redis_key, "completion_tokens", completion_tokens)
-        pipe.hincrby(redis_key, "total_tokens", total)
-        pipe.hincrby(redis_key, "request_count", 1)
+        # Common counter increments for both the daily and monthly windows.
+        fields: dict[str, int] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total,
+            "request_count": 1,
+        }
         if n_images > 0:
-            pipe.hincrby(redis_key, "image_count", n_images)
+            fields["image_count"] = n_images
         if microcents > 0:
-            pipe.hincrby(redis_key, "cost_micro_usd", microcents)
-        pipe.expire(redis_key, USAGE_TTL_SECONDS)
-        # Monthly accumulation
-        pipe.hincrby(monthly_key, "prompt_tokens", prompt_tokens)
-        pipe.hincrby(monthly_key, "completion_tokens", completion_tokens)
-        pipe.hincrby(monthly_key, "total_tokens", total)
-        pipe.hincrby(monthly_key, "request_count", 1)
-        if n_images > 0:
-            pipe.hincrby(monthly_key, "image_count", n_images)
-        if microcents > 0:
-            pipe.hincrby(monthly_key, "cost_micro_usd", microcents)
-        pipe.expire(monthly_key, MONTHLY_USAGE_TTL_SECONDS)
-        results = pipe.execute()
+            fields["cost_micro_usd"] = microcents
 
-        # Cost-Wert + Image-Count nach allen hincrby zurueckholen
-        # (koennen auch ohne aktuelle hincrby schon im Hash stehen).
-        cost_raw = self._redis.hget(redis_key, "cost_micro_usd") or 0
-        cost_micro = int(cost_raw) if cost_raw else 0
-        image_raw = self._redis.hget(redis_key, "image_count") or 0
-        image_total = int(image_raw) if image_raw else 0
+        # Atomic per-key increment + TTL refresh; returns the full counter map.
+        daily = self._store.incr_fields(daily_store_key, fields, USAGE_TTL_SECONDS)
+        self._store.incr_fields(monthly_store_key, fields, MONTHLY_USAGE_TTL_SECONDS)
 
         usage = DailyUsage(
-            prompt_tokens=results[0],
-            completion_tokens=results[1],
-            total_tokens=results[2],
-            request_count=results[3],
-            cost_micro_usd=cost_micro,
-            image_count=image_total,
+            prompt_tokens=daily.get("prompt_tokens", 0),
+            completion_tokens=daily.get("completion_tokens", 0),
+            total_tokens=daily.get("total_tokens", 0),
+            request_count=daily.get("request_count", 0),
+            cost_micro_usd=daily.get("cost_micro_usd", 0),
+            image_count=daily.get("image_count", 0),
         )
 
         config = self.get_key_config(api_key)
@@ -486,17 +480,13 @@ class TokenMeteringService:
 
     def get_daily_usage(self, api_key: str, date: str | None = None) -> DailyUsage:
         """Get usage for a specific day (default: today)."""
-        if not self._redis:
-            return DailyUsage()
         if date is None:
             date = datetime.now(UTC).strftime("%Y-%m-%d")
-        redis_key = f"{USAGE_KEY_PREFIX}:{api_key}:{date}"
-        raw = self._redis.hgetall(redis_key)
+        store_key = f"{USAGE_KEY_PREFIX}:{api_key}:{date}"
+        raw = self._store.get_fields(store_key)
         if not raw:
             return DailyUsage()
-        return DailyUsage.from_dict(
-            {k.decode() if isinstance(k, bytes) else k: int(v) for k, v in raw.items()}
-        )
+        return DailyUsage.from_dict(raw)
 
     def get_monthly_usage(self, api_key: str, month: str | None = None) -> DailyUsage:
         """Get usage aggregate for a specific month (default: current).
@@ -505,17 +495,13 @@ class TokenMeteringService:
         Reuse von DailyUsage als Container-Klasse — semantisch ist es ein
         Monats-Aggregat, aber alle Felder identisch (tokens, cost, images).
         """
-        if not self._redis:
-            return DailyUsage()
         if month is None:
             month = _current_month_key()
-        redis_key = f"{USAGE_KEY_PREFIX}:{api_key}:{month}"
-        raw = self._redis.hgetall(redis_key)
+        store_key = f"{USAGE_KEY_PREFIX}:{api_key}:{month}"
+        raw = self._store.get_fields(store_key)
         if not raw:
             return DailyUsage()
-        return DailyUsage.from_dict(
-            {k.decode() if isinstance(k, bytes) else k: int(v) for k, v in raw.items()}
-        )
+        return DailyUsage.from_dict(raw)
 
     def get_usage_range(self, api_key: str, days: int = 7) -> dict[str, DailyUsage]:
         """Get usage for the last N days."""
@@ -601,51 +587,44 @@ class TokenMeteringService:
 
     def list_all_keys(self) -> list[dict[str, Any]]:
         """List all registered metered keys with current usage."""
-        if not self._redis:
-            return []
         today = datetime.now(UTC).strftime("%Y-%m-%d")
-        cursor = 0
         keys = []
-        while True:
-            cursor, found = self._redis.scan(cursor, match=f"{CONFIG_KEY_PREFIX}:*", count=100)
-            for raw_key in found:
-                key_str = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
-                api_key = key_str.replace(f"{CONFIG_KEY_PREFIX}:", "", 1)
-                config = self.get_key_config(api_key)
-                if config:
-                    usage = self.get_daily_usage(api_key, today)
-                    monthly = self.get_monthly_usage(api_key)
-                    keys.append(
-                        {
-                            "api_key_prefix": api_key[:12] + "...",
-                            "tenant_id": config.tenant_id,
-                            "package": config.package,
-                            "active": config.active,
-                            "daily_token_limit": config.daily_token_limit,
-                            "monthly_token_limit": config.monthly_token_limit,
-                            "tokens_used_today": usage.total_tokens,
-                            "tokens_used_month": monthly.total_tokens,
-                            "cost_eur_month": monthly.cost_eur,
-                            "requests_today": usage.request_count,
-                            "requests_month": monthly.request_count,
-                            "usage_pct": min(
-                                100,
-                                int(
-                                    (usage.total_tokens / config.daily_token_limit * 100)
-                                    if config.daily_token_limit > 0
-                                    else 0
-                                ),
+        prefix = f"{CONFIG_KEY_PREFIX}:"
+        for store_key in self._store.scan_prefix(prefix):
+            api_key = store_key[len(prefix):]
+            config = self.get_key_config(api_key)
+            if config:
+                usage = self.get_daily_usage(api_key, today)
+                monthly = self.get_monthly_usage(api_key)
+                keys.append(
+                    {
+                        "api_key_prefix": api_key[:12] + "...",
+                        "tenant_id": config.tenant_id,
+                        "package": config.package,
+                        "active": config.active,
+                        "daily_token_limit": config.daily_token_limit,
+                        "monthly_token_limit": config.monthly_token_limit,
+                        "tokens_used_today": usage.total_tokens,
+                        "tokens_used_month": monthly.total_tokens,
+                        "cost_eur_month": monthly.cost_eur,
+                        "requests_today": usage.request_count,
+                        "requests_month": monthly.request_count,
+                        "usage_pct": min(
+                            100,
+                            int(
+                                (usage.total_tokens / config.daily_token_limit * 100)
+                                if config.daily_token_limit > 0
+                                else 0
                             ),
-                            "monthly_usage_pct": min(
-                                100,
-                                int(
-                                    (monthly.total_tokens / config.monthly_token_limit * 100)
-                                    if config.monthly_token_limit > 0
-                                    else 0
-                                ),
+                        ),
+                        "monthly_usage_pct": min(
+                            100,
+                            int(
+                                (monthly.total_tokens / config.monthly_token_limit * 100)
+                                if config.monthly_token_limit > 0
+                                else 0
                             ),
-                        }
-                    )
-            if cursor == 0:
-                break
+                        ),
+                    }
+                )
         return keys

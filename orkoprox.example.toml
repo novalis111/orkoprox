@@ -1,0 +1,29 @@
+# orkoprox declarative policy (example)
+#
+# Point POLICY_FILE at a copy of this file to configure routing aliases,
+# per-key request limits, and default quotas in one versionable place instead
+# of many environment variables. Only the sections/keys present here override
+# the environment / built-in defaults; everything else falls back.
+#
+# Reload without a restart (GitOps): POST /v1/admin/policy/reload with an admin
+# key after pushing a changed file.
+
+# Routing aliases: a client sends model="<name>" and the gateway routes to the
+# configured "<provider>/<model>". Any alias name maps to MODEL_ALIAS_<NAME>.
+[aliases]
+chat        = "ovh/Mistral-Small-3.2-24B-Instruct-2506"
+reason      = "ovh/gpt-oss-120b"
+xhigh       = "ovh/Meta-Llama-3_3-70B-Instruct"
+long_context = "ovh/Qwen3.5-9B"
+
+# Per-key request limits (0 = disabled). Applied live on reload.
+[limits]
+rate_limit_per_minute  = 120
+rate_limit_burst       = 30
+rate_limit_concurrency = 8
+
+# Default per-key budgets (virtual tokens). Used as the default when a key is
+# created without explicit limits.
+[quota.default]
+daily_token_limit   = 1_000_000
+monthly_token_limit = 20_000_000

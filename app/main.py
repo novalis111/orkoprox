@@ -47,9 +47,18 @@ from app.schemas import ChatCompletionsRequest, EmbeddingsRequest, RerankRequest
 from app.admin_auth import enforce_admin_auth
 from app.audit_log import AuditLog, mask_key
 from app.rate_limit import RateLimiter
+from app.policy import PolicyLoader, apply_policy_to_settings
 
 
 settings = get_settings()
+
+# Declarative policy (optional TOML): merge alias/limit overrides into settings
+# BEFORE the router reads them. Hot-reload of limits/quotas is read live by the
+# consuming components; routing-alias changes apply on the next reload.
+policy_loader = PolicyLoader(settings.policy_file or None)
+if policy_loader.enabled:
+    apply_policy_to_settings(policy_loader.policy, settings)
+
 # Namespace for gateway-emitted response headers (e.g. "X-Orkoprox-Guard-Blocked").
 # Configurable via BRAND_HEADER_PREFIX so deployments can rebrand without code edits.
 _HP = settings.brand_header_prefix.rstrip("-")
@@ -1890,6 +1899,42 @@ async def admin_list_metered_keys(
     return JSONResponse({"keys": keys, "count": len(keys)})
 
 
+@app.post("/v1/admin/policy/reload")
+async def admin_reload_policy(
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    """Reload the declarative policy file if it changed. Admin plane only.
+
+    GitOps-friendly: a deployment can push an updated orkoprox.toml and call
+    this endpoint to apply alias/limit changes without a restart.
+    """
+    admin_key = enforce_admin_auth(settings, x_api_key, authorization)
+    if not policy_loader.enabled:
+        raise ProxyError(
+            http_status=400,
+            code="policy_disabled",
+            message="no POLICY_FILE configured",
+        )
+    changed = policy_loader.reload_if_changed()
+    if changed:
+        apply_policy_to_settings(policy_loader.policy, settings)
+        rate_limiter.reconfigure(
+            per_minute=settings.rate_limit_per_minute,
+            burst=settings.rate_limit_burst,
+            concurrency=settings.rate_limit_concurrency,
+        )
+    audit_log.record("policy_reload", admin_key=mask_key(admin_key), changed=changed)
+    return JSONResponse(
+        {
+            "ok": True,
+            "reloaded": changed,
+            "aliases": len(policy_loader.policy.aliases),
+            "limits": len(policy_loader.policy.limits),
+        }
+    )
+
+
 @app.post("/v1/admin/metering/keys")
 async def admin_register_metered_key(
     request: Request,
@@ -1963,24 +2008,16 @@ async def admin_get_tenant_usage(
     tenant_keys = [k for k in all_keys if k["tenant_id"] == tenant_id]
     if not tenant_keys:
         return JSONResponse({"tenant_id": tenant_id, "usage": {}, "found": False})
-    # Get usage from Redis (find actual key)
+    # Resolve the tenant's actual key via the storage backend (Redis or memory).
     result: dict[str, Any] = {"tenant_id": tenant_id, "found": True, "daily": {}}
-    if metering_service._redis:
-        cursor = 0
-        while True:
-            cursor, found = metering_service._redis.scan(
-                cursor, match="metering:config:*", count=100
-            )
-            for raw_key in found:
-                key_str = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
-                api_key = key_str.replace("metering:config:", "", 1)
-                config = metering_service.get_key_config(api_key)
-                if config and config.tenant_id == tenant_id:
-                    usage_range = metering_service.get_usage_range(api_key, days)
-                    result["daily"] = {date: u.to_dict() for date, u in usage_range.items()}
-                    result["daily_token_limit"] = config.daily_token_limit
-                    result["package"] = config.package
-                    break
-            if cursor == 0:
-                break
+    prefix = "metering:config:"
+    for store_key in metering_service._store.scan_prefix(prefix):
+        api_key = store_key[len(prefix):]
+        config = metering_service.get_key_config(api_key)
+        if config and config.tenant_id == tenant_id:
+            usage_range = metering_service.get_usage_range(api_key, days)
+            result["daily"] = {date: u.to_dict() for date, u in usage_range.items()}
+            result["daily_token_limit"] = config.daily_token_limit
+            result["package"] = config.package
+            break
     return JSONResponse(result)

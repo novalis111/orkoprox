@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     audit_log_enabled: bool = False
     audit_log_path: str = "/tmp/orkoprox-audit.jsonl"
 
+    # ── Declarative policy file (TOML, optional, hot-reloaded) ─────────────
+    # Point this at an orkoprox.toml to set routing aliases + limits + quota
+    # defaults in one versionable file instead of many env vars. Empty = pure
+    # env config (default). See app/policy.py for the schema.
+    policy_file: str = ""
+
     # Provider selection. The default ships with a single OpenAI-compatible
     # upstream ("ovh"); add your own providers via env (see PROVIDERS docs).
     # `stub` is an internal test placeholder, never a real provider.
