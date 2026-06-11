@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # create the GitHub release + attach SBOM
   packages: write
   id-token: write   # for cosign keyless signing
 
