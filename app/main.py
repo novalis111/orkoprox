@@ -48,6 +48,8 @@ from app.admin_auth import enforce_admin_auth
 from app.audit_log import AuditLog, mask_key
 from app.rate_limit import RateLimiter
 from app.policy import PolicyLoader, apply_policy_to_settings
+from app.semantic_cache import SemanticCache
+from app.hooks import GuardHook, load_hooks, run_post_hooks, run_pre_hooks
 from app.compat import (
     anthropic_to_openai,
     ollama_to_openai,
@@ -90,6 +92,37 @@ rate_limiter = RateLimiter(
 
 # Append-only audit log (opt-in). Never records full keys or prompt content.
 audit_log = AuditLog(enabled=settings.audit_log_enabled, path=settings.audit_log_path)
+
+# Semantic response cache (F3, opt-in). Local, in-process, off by default.
+semantic_cache = SemanticCache(
+    enabled=settings.semantic_cache_enabled,
+    threshold=settings.semantic_cache_threshold,
+    max_entries=settings.semantic_cache_max_entries,
+    ttl_seconds=settings.semantic_cache_ttl_seconds,
+)
+
+# Pluggable guard hooks (F6, opt-in). Off by default (empty list).
+# Activated via GUARD_HOOKS env var, e.g. GUARD_HOOKS=pii_redact,ai_act_tag.
+guard_hooks: list[GuardHook] = load_hooks(settings.guard_hooks)
+
+
+async def _embed_for_cache(text: str, ctx: Any) -> list[float]:
+    """Embed text for semantic-cache keying. Returns [] on any failure (the
+    cache then simply misses — it must never break a request)."""
+    if not text:
+        return []
+    try:
+        _, _, data, _ = await provider_registry.embeddings(
+            settings.model_alias_embed, {"input": text}, ctx
+        )
+        items = data.get("data") or []
+        if items and isinstance(items[0], dict):
+            emb = items[0].get("embedding")
+            if isinstance(emb, list):
+                return [float(x) for x in emb]
+    except Exception:  # noqa: BLE001 — cache embedding is best-effort
+        pass
+    return []
 
 
 def _enforce_rate_limit(api_key: str | None) -> None:
@@ -1074,6 +1107,40 @@ async def chat_completions(
     ctx = _make_request_context(request)
     started = time.perf_counter()
 
+    # ─── Semantic cache (F3) ─────────────────────────────────────────────────
+    # Only cache deterministic, non-streaming, non-tool requests. A hit returns
+    # the cached response immediately (no provider call, no guard re-run since
+    # the cached answer was already guarded when first produced).
+    _cache_embedding: list[float] = []
+    _cacheable = (
+        semantic_cache.enabled
+        and not body.stream
+        and not body.tools
+        and not _cascade_tiers
+    )
+    if _cacheable:
+        _cache_text = _extract_last_user_text(body.messages)
+        _cache_embedding = await _embed_for_cache(_cache_text, ctx)
+        cached = semantic_cache.lookup(_cache_embedding)
+        if cached is not None:
+            metrics_store.record("cache", effective_model, 200, False, 0.0)
+            log_event(
+                logger,
+                "request_completed",
+                request_id=ctx.request_id,
+                path="/v1/chat/completions",
+                provider="cache",
+                raw_model=body.model,
+                model=effective_model,
+                latency_ms=0,
+                status_code=200,
+                stream=False,
+                cache="hit",
+            )
+            resp = JSONResponse(_sanitize_tool_calls(cached))
+            resp.headers[f"{_HP}-Cache"] = "hit"
+            return _add_metering_headers(resp, auth_key, None)
+
     # ─── Qwen3Guard pre-filter ───────────────────────────────────────────────
     # Pre-guard runs PARALLEL to the provider connect instead of sequentially
     # before it. At typical OVH latencies (~600-1000ms) and pre-guard latency
@@ -1083,6 +1150,41 @@ async def chat_completions(
     # On pre-block: provider_task.cancel() + try/except, then HTTP 451.
     # await pre_task is enforced before any output yield → no output leak
     # before pre-decision (fail-closed on race condition).
+
+    # ─── F6: pluggable pre-hooks (PII redaction, policy tagging …) ──────────
+    # Runs before everything else so that PII never reaches the provider or
+    # the Qwen3Guard (which also logs).  Hooks operate on the serialised
+    # payload["messages"] directly so the transformed text flows through the
+    # entire request pipeline unchanged.
+    _hook_pre_tags: dict[str, str] = {}
+    if guard_hooks:
+        _hook_input = _extract_last_user_text(body.messages)
+        _hook_ctx: dict = {
+            "model": effective_model,
+            "request_id": ctx.request_id,
+        }
+        _hook_text, _hook_pre_tags, _hook_blocked, _hook_block_reason = run_pre_hooks(
+            guard_hooks, _hook_input, _hook_ctx
+        )
+        if _hook_blocked:
+            return JSONResponse(
+                status_code=451,
+                content={
+                    "error": "Request blocked by guard hook",
+                    "code": "hook_blocked",
+                    "reason": _hook_block_reason,
+                    "request_id": ctx.request_id,
+                },
+            )
+        # If the text was transformed (e.g. PII stripped), patch the last user
+        # message in the serialised payload so the provider receives clean text.
+        if _hook_text != _hook_input:
+            for i in range(len(payload["messages"]) - 1, -1, -1):
+                if payload["messages"][i].get("role") == "user":
+                    payload["messages"][i] = dict(payload["messages"][i])
+                    payload["messages"][i]["content"] = _hook_text
+                    break
+
     skip_guard = _should_skip_guard(auth_key, request)
     user_input_text = _extract_last_user_text(body.messages) if not skip_guard else ""
     pre_decision: GuardDecision | None = None
@@ -1493,7 +1595,32 @@ async def chat_completions(
                 guard_pre_parallel=pre_task is not None,
                 guard_pre_parallel_saving_ms=saving_ms,
             )
+        # ─── F6: pluggable post-hooks (AI-Act tagging, output policy …) ────
+        _hook_post_tags: dict[str, str] = {}
+        if guard_hooks and not body.stream:
+            _hook_output = ""
+            try:
+                _hook_output = data["choices"][0]["message"].get("content") or ""
+            except (KeyError, IndexError, TypeError):
+                pass
+            if _hook_output:
+                _hook_post_ctx: dict = {
+                    "model": effective_model,
+                    "request_id": ctx.request_id,
+                }
+                _hook_output_new, _hook_post_tags = run_post_hooks(
+                    guard_hooks, _hook_output, _hook_post_ctx
+                )
+                if _hook_output_new != _hook_output:
+                    try:
+                        data["choices"][0]["message"]["content"] = _hook_output_new
+                    except (KeyError, IndexError, TypeError):
+                        pass
+
         resp = JSONResponse(_sanitize_tool_calls(data))
+        # F6: emit all hook tags as response headers.
+        for _tag_key, _tag_val in {**_hook_pre_tags, **_hook_post_tags}.items():
+            resp.headers[f"{_HP}-Hook-{_tag_key}"] = _tag_val
         # F4: signal a budget-driven downgrade so clients can detect it.
         if _budget_degrade_alias:
             resp.headers[f"{_HP}-Budget-Degraded"] = _budget_degrade_alias
@@ -1509,6 +1636,11 @@ async def chat_completions(
             resp.headers[f"{_HP}-Guard-Pre-Latency-Ms"] = str(int(pre_decision.latency_ms))
         if post_decision:
             resp.headers[f"{_HP}-Guard-Post-Latency-Ms"] = str(int(post_decision.latency_ms))
+        # F3: cache the (already-guarded) response for future semantically-close
+        # requests. Skip if the output was guard-blocked (don't serve it again).
+        if _cacheable and _cache_embedding and not guard_blocked_post:
+            semantic_cache.store(ctx.request_id, _cache_embedding, data)
+            resp.headers[f"{_HP}-Cache"] = "miss"
         return _add_metering_headers(resp, auth_key, usage_after)
     except ProviderError as exc:
         err = _normalize_provider_error(exc)

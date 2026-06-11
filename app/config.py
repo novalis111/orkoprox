@@ -68,6 +68,24 @@ class Settings(BaseSettings):
     escalation_trigger_model: str = "auto"
     escalation_cascade: str = ""
 
+    # ── Semantic cache (F3, optional, off by default) ──────────────────────
+    # Caches chat responses keyed by an embedding of the request, so a
+    # semantically similar prompt is served from cache instead of the provider.
+    # Off by default — one flag turns it on. Local + ephemeral (in-process).
+    semantic_cache_enabled: bool = False
+    # Cosine-similarity threshold for a cache hit (0..1; higher = stricter).
+    semantic_cache_threshold: float = 0.95
+    # Max number of cached entries (LRU-evicted beyond this).
+    semantic_cache_max_entries: int = 1000
+    # Entry time-to-live in seconds (0 = no expiry).
+    semantic_cache_ttl_seconds: int = 3600
+
+    # ── Pluggable guard hooks (F6, optional) ───────────────────────────────
+    # Comma-separated list of built-in or dotted-path pre/post request hooks
+    # (PII redaction, content policy, EU-AI-Act tagging). Empty = none.
+    # Built-in names: "pii_redact", "ai_act_tag". See app/hooks.py.
+    guard_hooks: str = ""
+
     # ── Declarative policy file (TOML, optional, hot-reloaded) ─────────────
     # Point this at an orkoprox.toml to set routing aliases + limits + quota
     # defaults in one versionable file instead of many env vars. Empty = pure
@@ -199,6 +217,8 @@ class Settings(BaseSettings):
     # voice = turbo (schnell, ~$0.078/h), voice_hq = v3 (HQ, langsamer, ~$0.31/h).
     model_alias_voice: str = "ovh/whisper-large-v3-turbo"
     model_alias_voice_hq: str = "ovh/whisper-large-v3"
+    # Embedding alias (used by /v1/embeddings consumers and the semantic cache).
+    model_alias_embed: str = "ovh/bge-multilingual-gemma2"
 
     # Per-task fallback chains (graceful degradation). Each ``fallback_providers_*``
     # is ENV-overridable, e.g. to add a local stub provider for dev tests.

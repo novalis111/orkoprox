@@ -84,6 +84,8 @@ The `model` field accepts both raw provider model names and **tier/task aliases*
 - **Budget guardrails with graceful degrade** — when a key runs out of budget, optionally downgrade to a cheaper tier instead of returning a hard 429. No surprise outage *or* surprise bill.
 - **Server-side escalation cascade** — send `model="auto"` and the gateway walks a configured tier list (e.g. `low → chat → xhigh`), stopping at the first usable answer.
 - **Drop-in compatibility endpoints** — point Anthropic (`POST /v1/messages`) or Ollama (`POST /api/chat`) clients at orkoprox unchanged; it translates the wire format both ways.
+- **Semantic cache** — optional, off by default. Embedding-keyed response cache: a paraphrased prompt close enough to a previous one is served from cache, cutting cost and latency. Local and in-process.
+- **Pluggable guard hooks** — pre/post-request hooks for PII redaction (mask emails/IBANs/cards before they reach the provider), content policy, and EU-AI-Act transparency tagging. Built-ins plus your own via dotted path.
 - **Per-key quotas** — daily and monthly budget limits per API key. Token weighting makes expensive models consume more "virtual tokens" so you control costs accurately.
 - **Cost tracking** — EUR/USD cost attribution per request and per key. Quota-status headers (`X-Orkoprox-Quota-Status: ok|warn|critical|exceeded`) on every response.
 - **Content moderation guard** — pluggable pre/post filter (fail-open configurable). Built for EU AI Act compliance.
@@ -122,6 +124,8 @@ Copy `.env.example` to `.env` and edit. All settings are environment variables.
 | `AUDIT_LOG_ENABLED` | `false` | Append-only audit log (key prefixes only, never prompt content) |
 | `BUDGET_DEGRADE_ALIAS` | _(optional)_ | On budget exhaustion, downgrade to this alias instead of 429 |
 | `ESCALATION_CASCADE` | _(optional)_ | Comma-separated tiers walked by `model="auto"` (e.g. `low,chat,xhigh`) |
+| `SEMANTIC_CACHE_ENABLED` | `false` | Embedding-keyed response cache (off by default) |
+| `GUARD_HOOKS` | _(optional)_ | Pre/post hooks, e.g. `pii_redact,ai_act_tag` |
 | `ALERT_TELEGRAM_BOT_TOKEN` | _(optional)_ | Telegram bot token for alerting |
 | `ALERT_TELEGRAM_CHAT_ID` | _(optional)_ | Telegram chat/channel ID for alerts |
 
@@ -165,7 +169,6 @@ When Redis is configured, orkoprox tracks spend per API key.
 
 These features are planned and in progress — not yet in the current release:
 
-- **Semantic cache** — deduplicate semantically equivalent requests to cut costs.
 - **Streaming on the compatibility endpoints** — the Anthropic/Ollama endpoints are non-streaming for now.
 - **Built-in admin dashboard** — lightweight web UI for quota inspection and key management.
 
