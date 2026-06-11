@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     proxy_api_keys: str = ""
     production_min_api_key_length: int = 40
 
+    # Reject request bodies larger than this (bytes) with HTTP 413 before they
+    # are read into memory — guards against a tenant exhausting RAM ahead of the
+    # upstream call. Default 10 MiB covers large chat/embeddings payloads.
+    # Set to 0 to disable the check.
+    max_request_body_bytes: int = 10 * 1024 * 1024
+
     # ── Admin plane (strictly separate from the data plane) ────────────────
     # Keys that may call /v1/admin/* (key management, tenant usage). These are
     # NOT accepted on data-plane (/v1/chat, …) requests, and data-plane keys are

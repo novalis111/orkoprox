@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Data-plane API-key validation now uses a constant-time comparison
+  (`hmac.compare_digest`) instead of plain set membership, matching the admin
+  plane and removing a key-timing side channel.
+- Added a request body-size limit (`MAX_REQUEST_BODY_BYTES`, default 10 MiB)
+  returning `413` before oversized payloads are buffered.
+
+### Changed
+- All GitHub Actions are now pinned to commit SHAs (with version comments) in
+  both CI and release workflows, closing a supply-chain path to the signing /
+  registry tokens.
+- The Docker base image is pinned to a digest for reproducible builds.
+- CI now runs a Trivy filesystem + config + secret scan in addition to the
+  image scan.
+
+### Docs
+- SECURITY.md: guidance to use file-mounted secrets over plain env vars for
+  provider keys, plus notes on the body-size cap and cosign verification.
+
 ## [0.1.0]
 
 Initial public release of **orkoprox** — an OpenAI-compatible, self-hosted LLM

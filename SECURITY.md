@@ -79,3 +79,6 @@ Out of scope:
 - Use `PROXY_AUTH_REQUIRED=true` (the default). Disable only in isolated local dev environments.
 - For cross-host Redis, use `rediss://` (TLS) — see `.env.example`.
 - Rotate `PROXY_API_KEYS` if a key is suspected compromised. Redis quota state is keyed by the hash — old hash entries will expire naturally.
+- **Provider API keys: prefer file-mounted secrets over plain environment variables in production.** Values passed via `environment:`/`env_file:` are readable through `docker inspect` and `/proc/<pid>/environ` by anyone with host or container access. Use Docker / Compose `secrets:` (mounted under `/run/secrets/…` on tmpfs) or your orchestrator's secret store, and keep any `.env` file at mode `0600`.
+- `MAX_REQUEST_BODY_BYTES` (default 10 MiB) caps request body size and returns `413` before large payloads are buffered. Lower it if your workload only sends small prompts.
+- For a fully reproducible deployment, the published image is pinned to a base-image digest and signed with cosign — verify with `cosign verify ghcr.io/<owner>/orkoprox@<digest>`.

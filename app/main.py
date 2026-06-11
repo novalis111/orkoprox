@@ -50,7 +50,7 @@ from app.services.content_moderation import (
 )
 from app.token_metering import TokenMeteringService, KeyConfig
 from app.schemas import ChatCompletionsRequest, EmbeddingsRequest, RerankRequest
-from app.admin_auth import enforce_admin_auth
+from app.admin_auth import enforce_admin_auth, matches_any
 from app.audit_log import AuditLog, mask_key
 from app.rate_limit import RateLimiter
 from app.policy import PolicyLoader, apply_policy_to_settings
@@ -255,8 +255,9 @@ def _authenticate_data_key(
     presented_key = _extract_api_key(x_api_key, authorization)
     if not presented_key:
         raise ProxyError(http_status=401, code="missing_api_key", message="missing_api_key")
-    # Check static keys first, then metered keys
-    if presented_key not in allowed:
+    # Check static keys first (constant-time, avoids timing-leaking the key),
+    # then metered keys.
+    if not matches_any(presented_key, allowed):
         if metering_service.enabled:
             config = metering_service.get_key_config(presented_key)
             if config and config.active:
@@ -662,6 +663,26 @@ async def request_context_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid4())
     request.state.request_id = request_id
     request.state.started_at = time.perf_counter()
+
+    # Reject oversized bodies up front (cheap Content-Length check) so a single
+    # large request cannot exhaust memory before reaching the upstream call.
+    max_body = settings.max_request_body_bytes
+    if max_body > 0:
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except ValueError:
+                declared = -1
+            if declared > max_body:
+                return _error_response(
+                    request_id,
+                    ProxyError(
+                        http_status=413,
+                        code="request_too_large",
+                        message=f"request body exceeds {max_body} bytes",
+                    ),
+                )
 
     try:
         response = await call_next(request)

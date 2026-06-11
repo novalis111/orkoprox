@@ -32,7 +32,7 @@ def _extract_key(x_api_key: str | None, authorization: str | None) -> str | None
     return token.strip()
 
 
-def _matches_any(candidate: str, allowed: set[str]) -> bool:
+def matches_any(candidate: str, allowed: set[str]) -> bool:
     # Constant-time comparison against each allowed key to avoid leaking key
     # length/prefix through timing.
     matched = False
@@ -40,6 +40,10 @@ def _matches_any(candidate: str, allowed: set[str]) -> bool:
         if hmac.compare_digest(candidate, key):
             matched = True
     return matched
+
+
+# Private alias kept for existing internal callers within this module.
+_matches_any = matches_any
 
 
 def enforce_admin_auth(
