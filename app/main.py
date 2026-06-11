@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             pass
 
 
-app = FastAPI(title="orkoprox", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="orkoprox", version="0.1.1", lifespan=lifespan)
 
 
 def _error_response(request_id: str, err: ProxyError) -> JSONResponse:

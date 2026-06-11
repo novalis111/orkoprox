@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1]
+
+Hardening release — no breaking changes.
+
 ### Security
 - Data-plane API-key validation now uses a constant-time comparison
   (`hmac.compare_digest`) instead of plain set membership, matching the admin
