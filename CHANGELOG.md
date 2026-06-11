@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2]
+
+Custom providers + dashboard smoke test (see entries below).
+
 ### Added
 - **Custom OpenAI-compatible providers** via `CUSTOM_PROVIDERS` (JSON): register
   any number of additional backends — Baseten, Groq, Together, … — without a code
