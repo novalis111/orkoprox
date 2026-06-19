@@ -28,3 +28,22 @@ nackten model-String sendet → 404 möglich.
 **Aktion:** in W3-Canary live gegen orkoprox-Parallelport prüfen (model=`gpt-5.4` mit TrueCode-Key).
 Falls real genutzt: `CUSTOM_PROVIDERS`-Alias ODER Aufrufer auf `xhigh`/`reason` umstellen (Infra/Config,
 kein orkoprox-Code-Edit). Bis dahin: Risiko niedrig (kein Beleg für aktive Nutzung).
+
+## B3 — orkoprox hat keinen `/v1/responses`-Endpoint (OpenAI Responses-API)
+**Gefunden:** W3-Canary, 2026-06-19.
+orkoprox implementiert nur Chat-Completions (`/v1/chat/completions`), NICHT die OpenAI
+Responses-API (`/v1/responses`, `previous_response_id`, store). Live: `/v1/responses` → **404**.
+Die `RESPONSE_STORE_*`-Env-Vars (aus tc-llm-proxy portiert) werden vom orkoprox-Code nicht gelesen
+→ aus oekotopia-.env entfernt.
+
+**Impact:** aktuell **kein Cutover-Risiko**. Belege:
+- tc-llm-proxy-Logs 7 Tage: **0** `/v1/responses`-Calls.
+- `leitivo-platform/apps/api/app/services/llm_client.py` HAT zwar einen
+  `endpoint: Literal["responses","chat_completions"]`-Switch (Z.557/568), aber ALLE realen
+  Aufrufe nutzen `endpoint="chat_completions"` (Z.599/666); `endpoint="responses"` wird nirgends
+  aufgerufen (toter Pfad). leitivo-client nutzt ausschließlich `/v1/chat/completions`.
+
+**Fix (später, falls jemand den responses-Pfad scharfschaltet):** `/v1/responses` in orkoprox
+implementieren (Chat-Completions-Wrapper + Redis-Store für previous_response_id) ODER den
+leitivo-platform-Aufrufer fest auf `chat_completions` festschreiben. ~3-5 PT. Upstream-fähig.
+Bis dahin: in W5 mit leitivo-platform-Owner verifizieren, dass der responses-Pfad inaktiv bleibt.
