@@ -1,9 +1,25 @@
 ---
 plan_id: w-orkoprox-cutover-oekotopia
+wrap_2026-06-19: >-
+  W-ORKOPROX-CUTOVER vollzogen (W1-W6, 1 Lauf, autonom). orkoprox ist LIVE als SSOT-LLM-Gateway
+  hinter llm.true-code.de auf oekotopia. Commits orkoprox: W1 c6d6ce2, W2 e122f08, W3 41e4c8c,
+  W4 6c0e247, W5 6116ba2, W6a 2f1e853 (+wrap). Hub-Registry: a8fdf6a (ssot-live/archived).
+  Live-Smoke je Welle grün: W2 /v1/models 40 IDs+chat+embed(3584d); W3 11 Keys×10 Aliase 0-Fehler;
+  W4 Traefik-Label-Swap 23/23 Domains==Baseline; W5 100×200/0×5xx echter Traffic, Avi
+  reason→gpt-oss-120b (Qualität GESTIEGEN vs Legacy-Apriel-15b). PT plan→real: W1 1→1, W2 3→4.5,
+  W3 3→2, W4 2→2.5, W5 2→1.5, W6 1→1 (gesamt 12→12.5 PT).
+  CODE-CHANGES (Owner hob Highlander auf): B1 model_alias_map SSOT (/v1/models 12→22 Aliase),
+  compose-Profiles (whisper/reranker opt-in, kein 8GB-First-Pull), RERANKER_ENABLED=false-default,
+  Whisper-Sidecar raus (OVH-direkt). 568 Tests grün, Ruff grün.
+  OWNER-TODOs: (1) GitHub-Push novalis111/orkoprox freigeben (Owner-Entscheidung, Code bereit).
+  (2) W6b ab 2026-06-21: tc-llm-proxy-Stack stoppen+archivieren (Runbook deploy/oekotopia/
+  W6b_ARCHIV_RUNBOOK.md, Hot-Standby bis dahin). (3) P1 /v1/responses-Welle (Owner: "enterprise
+  grade, bald", Backlog B3). HUB-RESTPOSTEN: Compendium-Promotion (SSH-Timeout-Falle, Sidecar-
+  Provider-Regel), nächster orkoprox-Wellen-Schnitt (Responses-API).
 repo: orkoprox
 created: '2026-06-19'
 updated: '2026-06-19'
-status: approved
+status: completed
 owner: terpelle-ingo
 external_blockers: []
 waves:
