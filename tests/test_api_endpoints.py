@@ -161,6 +161,24 @@ def test_models_lists_aliases_and_targets(client):
     assert "default_reasoning_level" in high
 
 
+def test_models_advertises_every_routable_alias(client):
+    """SSOT-Regression: /v1/models MUSS jeden Alias aus settings.model_alias_map
+    listen, sonst können Clients (oekotopia=embed, lc=vision_x) ihn nicht
+    entdecken. Genau diese Drift (vision_x/embed/voice fehlten) war der
+    Cutover-Befund 2026-06-19 — der Test friert die Vollabdeckung ein."""
+    from app.main import settings
+
+    response = client.get("/v1/models", headers={"authorization": "Bearer test-key"})
+    assert response.status_code == 200
+    ids = {entry["id"] for entry in response.json()["data"]}
+
+    advertised_aliases = {alias for alias, target in settings.model_alias_map.items() if target.strip()}
+    missing = advertised_aliases - ids
+    assert not missing, f"/v1/models verschweigt routbare Aliase: {sorted(missing)}"
+    # Die Client-kritischen Aliase explizit (Cutover-Garantie):
+    assert {"vision_x", "embed", "high", "ocr"}.issubset(ids)
+
+
 def test_chat_completions_stream_appends_done_when_upstream_omits_it(
     client, monkeypatch
 ):

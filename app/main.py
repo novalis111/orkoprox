@@ -414,22 +414,10 @@ def _add_metering_headers(
 
 
 def _build_models_payload() -> dict[str, Any]:
-    alias_targets = {
-        # Tier aliases (quality-based)
-        "xhigh": settings.model_alias_xhigh,
-        "high": settings.model_alias_high,
-        "medium": settings.model_alias_medium,
-        "low": settings.model_alias_low,
-        # Task aliases (task-based — proxy picks optimal model)
-        "classify": settings.model_alias_classify,
-        "extract": settings.model_alias_extract,
-        "compose": settings.model_alias_compose,
-        "chat": settings.model_alias_chat,
-        "reason": settings.model_alias_reason,
-        "report": settings.model_alias_report,
-        "ocr": settings.model_alias_ocr,
-        "vision": settings.model_alias_vision,
-    }
+    # Single source of truth (app/config.py:model_alias_map) — the advertised
+    # /v1/models list always matches what the router can resolve, so clients can
+    # discover every built-in alias (vision_x, embed, voice, report_premium, …).
+    alias_targets = settings.model_alias_map
     reasoning_levels = [
         {"effort": "low", "description": "Fast responses with lighter reasoning"},
         {

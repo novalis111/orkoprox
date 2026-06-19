@@ -263,6 +263,47 @@ class Settings(BaseSettings):
     # Embedding alias (used by /v1/embeddings consumers and the semantic cache).
     model_alias_embed: str = "ovh/bge-multilingual-gemma2"
 
+    @property
+    def model_alias_map(self) -> dict[str, str]:
+        """Single source of truth: every built-in alias → ``provider/model`` target.
+
+        Both the router (route resolution) and ``GET /v1/models`` (model listing)
+        consume this so the advertised model list never drifts from what is
+        actually routable. Keep in lockstep with the ``model_alias_*`` fields and
+        the README cheatsheet (``embed`` is routed via /v1/embeddings, not chat,
+        but is listed here so clients can discover it).
+        """
+        return {
+            # Tier aliases (quality-based)
+            "xhigh": self.model_alias_xhigh,
+            "high": self.model_alias_high,
+            "medium": self.model_alias_medium,
+            "low": self.model_alias_low,
+            # Task aliases (task-based)
+            "classify": self.model_alias_classify,
+            "extract": self.model_alias_extract,
+            "compose": self.model_alias_compose,
+            "chat": self.model_alias_chat,
+            "reason": self.model_alias_reason,
+            "report": self.model_alias_report,
+            "ocr": self.model_alias_ocr,
+            "vision": self.model_alias_vision,
+            # Finer-grained reasoning tiers
+            "reason_lite": self.model_alias_reason_lite,
+            "long_context": self.model_alias_long_context,
+            "reason_mid": self.model_alias_reason_mid,
+            # Premium vision + media
+            "vision_x": self.model_alias_vision_x,
+            "image": self.model_alias_image,
+            "voice": self.model_alias_voice,
+            "voice_hq": self.model_alias_voice_hq,
+            # Embedding (routed via /v1/embeddings)
+            "embed": self.model_alias_embed,
+            # Mistral-LP premium two-stage generation
+            "report_premium": self.model_alias_report_premium,
+            "report_structure": self.model_alias_report_structure,
+        }
+
     # Per-task fallback chains (graceful degradation). Each ``fallback_providers_*``
     # is ENV-overridable, e.g. to add a local stub provider for dev tests.
     fallback_providers_classify: str = "ovh"
@@ -315,7 +356,12 @@ class Settings(BaseSettings):
     # listens on port 80 internally and exposes POST /rerank. CPU-only.
     # Note: on CPUs without AVX-512, use an ONNX model build — TEI's Candle
     # backend segfaults there (see docker-compose.yml).
-    reranker_enabled: bool = True
+    #
+    # OFF by default: the sidecar is a 2.3 GB opt-in (docker compose
+    # --profile reranker-sidecar). With it disabled, /v1/rerank returns a clean
+    # 503 instead of dialing a sidecar that was never started. Set
+    # RERANKER_ENABLED=true together with the profile to turn reranking on.
+    reranker_enabled: bool = False
     reranker_base_url: str = "http://reranker:80"
     reranker_model: str = "bge-reranker-v2-m3"
     # TEI rerank is cheap + fast (CPU cross-encoder, a few ms per doc).

@@ -226,29 +226,9 @@ class ProviderRegistry:
             route_key = "prefixed"
         else:
             route_key = self._route_key(normalized_raw)
-        tier_alias_target = {
-            "xhigh": self.settings.model_alias_xhigh,
-            "high": self.settings.model_alias_high,
-            "medium": self.settings.model_alias_medium,
-            "low": self.settings.model_alias_low,
-            "classify": self.settings.model_alias_classify,
-            "extract": self.settings.model_alias_extract,
-            "compose": self.settings.model_alias_compose,
-            "chat": self.settings.model_alias_chat,
-            "reason": self.settings.model_alias_reason,
-            "report": self.settings.model_alias_report,
-            "ocr": self.settings.model_alias_ocr,
-            "vision": self.settings.model_alias_vision,
-            "vision_x": self.settings.model_alias_vision_x,
-            "image": self.settings.model_alias_image,
-            "voice": self.settings.model_alias_voice,
-            "voice_hq": self.settings.model_alias_voice_hq,
-            "reason_lite": self.settings.model_alias_reason_lite,
-            "long_context": self.settings.model_alias_long_context,
-            "reason_mid": self.settings.model_alias_reason_mid,
-            "report_premium": self.settings.model_alias_report_premium,
-            "report_structure": self.settings.model_alias_report_structure,
-        }.get(alias)
+        # Single source of truth (app/config.py:model_alias_map) — shared with
+        # GET /v1/models so routable aliases and advertised aliases never drift.
+        tier_alias_target = self.settings.model_alias_map.get(alias)
         if tier_alias_target and tier_alias_target.lower() not in self._ALL_ALIASES:
             normalized_raw = tier_alias_target.strip()
         elif alias_target and alias not in self._ALL_ALIASES:

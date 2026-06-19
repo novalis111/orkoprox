@@ -1,0 +1,100 @@
+# orkoprox — oekotopia Deploy-Compose
+#
+# W2 (parallel): Port 8081 host-exposed für direkten Canary-Smoke, KEINE Traefik-Labels
+#   → läuft NEBEN tc-llm-proxy (Port 8091 / llm.true-code.de), null Disruption.
+# W4 (cutover): Traefik-Labels werden ergänzt (Host(`llm.true-code.de`) → orkoprox),
+#   das Label vom tc-llm-proxy-Container entfernt. Hot-Standby bleibt laufen.
+#
+# Vorbild: /srv/stacks/tc-llm-proxy/docker-compose.deploy.yml (5-Container-Stack).
+# Netzwerk `proxy` ist external (von Traefik geteilt) — für W4-Routing nötig.
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis-data:/data
+    networks:
+      - proxy
+
+  # KEIN Whisper-Sidecar: orkoprox transkribiert direkt über OVH AI Endpoints
+  # (app/main.py:1807 → {OVH_BASE_URL}/audio/transcriptions, EU-DC, pay-per-second).
+  # WHISPER_BASE_URL wird vom Code NICHT gelesen (verifiziert 2026-06-19) — der
+  # Sidecar aus der tc-llm-proxy-Vorlage wäre toter 7.5 GB-Ballast. OVH hat
+  # whisper-large-v3 + -turbo nativ (voice/voice_hq-Aliase routen dorthin).
+
+  # Cross-Encoder-Reranking-Sidecar — ONNX-Backend (oekotopia-Host hat kein AVX-512,
+  # siehe tc-llm-proxy-Kommentar). bge-reranker-v2-m3-onnx, CPU-only.
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    restart: unless-stopped
+    command: ["--model-id", "${RERANKER_MODEL_ID:-celinehoang/bge-reranker-v2-m3-onnx}"]
+    environment:
+      - MODEL_ID=${RERANKER_MODEL_ID:-celinehoang/bge-reranker-v2-m3-onnx}
+      - HF_ENDPOINT=https://huggingface.co
+    volumes:
+      - reranker-models:/data
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+
+  proxy:
+    image: orkoprox:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - RERANKER_BASE_URL=http://reranker:80
+    # W2: host-exposed auf 8081 für direkten Canary-Smoke (8091 ist tc-llm-proxy).
+    ports:
+      - "8081:8091"
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      # Reranker: NUR service_started, NICHT service_healthy. Der ONNX-Erststart
+      # lädt ~2.3 GB (~8 min) — der Proxy darf darauf nicht warten. /v1/rerank
+      # liefert solange 503 (reranker_unavailable), alle anderen Routen laufen.
+      reranker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - proxy
+    # ── W4-CUTOVER: untenstehende Labels aktivieren (auskommentiert in W2) ──
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.docker.network=proxy
+    #   - traefik.http.routers.orkoprox-http.rule=Host(`llm.true-code.de`)
+    #   - traefik.http.routers.orkoprox-http.entrypoints=web
+    #   - traefik.http.routers.orkoprox-http.middlewares=orkoprox-redirect
+    #   - traefik.http.middlewares.orkoprox-redirect.redirectscheme.scheme=https
+    #   - traefik.http.routers.orkoprox.rule=Host(`llm.true-code.de`)
+    #   - traefik.http.routers.orkoprox.entrypoints=websecure
+    #   - traefik.http.routers.orkoprox.tls=true
+    #   - traefik.http.routers.orkoprox.tls.certresolver=le
+    #   - traefik.http.services.orkoprox.loadbalancer.server.port=8091
+
+networks:
+  proxy:
+    external: true
+
+volumes:
+  redis-data:
+  reranker-models:

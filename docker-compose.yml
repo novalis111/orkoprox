@@ -34,9 +34,19 @@ services:
     volumes:
       - redis-data:/data
 
-  # Optional Whisper sidecar for /v1/audio/transcriptions.
+  # OPTIONAL Whisper sidecar for /v1/audio/transcriptions — OFF by default.
+  #
+  # orkoprox transcribes via the configured provider's audio endpoint out of the
+  # box (e.g. OVH AI Endpoints has whisper-large-v3 / -turbo natively; the
+  # `voice`/`voice_hq` aliases route there). You only need this 7.5 GB sidecar if
+  # your provider has NO audio endpoint and you want fully self-hosted ASR.
+  #
+  # Enable explicitly:  docker compose --profile whisper-sidecar up -d
+  # (or set COMPOSE_PROFILES=whisper-sidecar). Without the profile, `docker
+  # compose up` never pulls this image.
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
+    profiles: ["whisper-sidecar"]
     ports:
       - "9000:9000"
     environment:
@@ -52,9 +62,19 @@ services:
       retries: 5
       start_period: 60s
 
-  # Optional cross-encoder reranking sidecar for /v1/rerank.
+  # OPTIONAL cross-encoder reranking sidecar for /v1/rerank — OFF by default.
   # HuggingFace Text-Embeddings-Inference (TEI) serves bge-reranker-v2-m3 via
-  # POST /rerank, similar to the Whisper sidecar. CPU-only.
+  # POST /rerank. CPU-only, but the first start pulls ~2.3 GB of ONNX weights.
+  #
+  # Unlike embeddings/ASR, no EU provider exposes a rerank endpoint as of
+  # 2026-06 (OVH + Mistral both return 404; OVH roadmap issue #1140 is open), so
+  # this self-hosted sidecar is the only compliance-friendly way to offer
+  # /v1/rerank. It stays OFF by default so a fresh `docker compose up` does not
+  # pull 2.3 GB unasked — enable it only if you actually rerank.
+  #
+  # Enable explicitly:  docker compose --profile reranker-sidecar up -d
+  # (or set COMPOSE_PROFILES=reranker-sidecar). Also set RERANKER_ENABLED=true.
+  # Without the profile, /v1/rerank returns 503 (reranker_unavailable).
   #
   # Image + model choice: TEI's Candle CPU backend is built with AVX-512
   # intrinsics and segfaults on CPUs without AVX-512. Use the ONNX (ORT)
@@ -63,6 +83,7 @@ services:
   # repo root). The cpu-1.7 image tag respects HF_ENDPOINT.
   reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    profiles: ["reranker-sidecar"]
     restart: unless-stopped
     command: ["--model-id", "${RERANKER_MODEL_ID:-celinehoang/bge-reranker-v2-m3-onnx}"]
     ports:

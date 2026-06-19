@@ -62,12 +62,40 @@ def _install_fake_httpx(
     behaviour: str,
     json_body: Any,
 ) -> None:
-    """Patcht httpx.AsyncClient im reranker-Provider-Modul."""
+    """Patcht httpx.AsyncClient im reranker-Provider-Modul.
+
+    Aktiviert zugleich ``reranker_enabled`` auf den Settings, die der Router
+    konsultiert — der Sidecar ist seit 2026-06 per Default AUS (2.3 GB opt-in),
+    aber diese Tests prüfen ja gerade den AKTIVEN Rerank-Pfad."""
+    import app.main as main_mod
     import app.providers.reranker as reranker_mod
 
     _FakeAsyncClient.behaviour = behaviour
     _FakeAsyncClient.json_body = json_body
     monkeypatch.setattr(reranker_mod.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        main_mod.provider_registry.settings, "reranker_enabled", True, raising=False
+    )
+
+
+# ─── Disabled-by-default guard ───────────────────────────────────────────────
+
+
+def test_rerank_disabled_by_default_returns_503(client, monkeypatch):
+    """Der Reranker-Sidecar ist seit 2026-06 per Default AUS (2.3 GB opt-in).
+    Ohne RERANKER_ENABLED=true muss /v1/rerank sauber 503 liefern statt einen
+    nie gestarteten Sidecar anzuwählen."""
+    import app.main as main_mod
+
+    monkeypatch.setattr(
+        main_mod.provider_registry.settings, "reranker_enabled", False, raising=False
+    )
+    response = client.post(
+        "/v1/rerank",
+        headers={"x-api-key": "test-key"},
+        json={"model": "rerank", "query": "q", "documents": ["a", "b"]},
+    )
+    assert response.status_code == 503
 
 
 # ─── Auth-Guard ────────────────────────────────────────────────────────────
