@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`Settings.model_alias_map`** — single source of truth for every built-in
+  alias → `provider/model` target. The router and `GET /v1/models` now both
+  consume it, so the advertised model list never drifts from what is routable.
+- Docker Compose **profiles** for the optional sidecars: `whisper-sidecar` and
+  `reranker-sidecar`. A plain `docker compose up` now starts only `redis` +
+  `proxy` and never pulls the heavy sidecar images unasked.
+
+### Changed
+- **`GET /v1/models` now advertises all 22 built-in aliases** (previously 12).
+  `vision_x`, `embed`, `voice`, `voice_hq`, `image`, `reason_lite`,
+  `reason_mid`, `long_context`, `report_premium`, `report_structure` were
+  routable but unlisted — clients can now discover them.
+- **`RERANKER_ENABLED` now defaults to `false`** (was `true`). The TEI reranker
+  sidecar is a ~2.3 GB opt-in; with it off, `/v1/rerank` returns a clean 503
+  instead of dialing a sidecar that was never started. No EU provider exposes a
+  rerank endpoint (OVH + Mistral return 404), so the self-hosted sidecar stays
+  the only compliance-friendly option — just opt-in now.
+- Documented that ASR/transcription routes to the provider's audio endpoint
+  (e.g. OVH `whisper-large-v3`) — the Whisper sidecar is not required.
+
 ## [0.1.2]
 
 Custom providers + dashboard smoke test (see entries below).
