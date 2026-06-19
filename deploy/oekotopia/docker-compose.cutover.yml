@@ -1,0 +1,28 @@
+# W4 Cutover-Override — gibt dem orkoprox-proxy die Traefik-Labels für
+# Host(`llm.true-code.de`). Anwenden ZUSAMMEN mit der Basis-Datei:
+#
+#   docker compose -f docker-compose.oekotopia.yml -f docker-compose.cutover.yml up -d proxy
+#
+# Spiegelt exakt die tc-llm-proxy-Router-Struktur (HTTP→HTTPS-Redirect + HTTPS
+# mit certresolver `le`, Backend-Port 8091), nur mit eigenem Router-Namen
+# `orkoprox`, damit nichts mit dem (zu deaktivierenden) tc-llm-Router kollidiert.
+#
+# Rollback: dieselbe Basis-Datei OHNE diese Override neu anwenden
+# (docker compose -f docker-compose.oekotopia.yml up -d --force-recreate proxy),
+# dann tc-llm-proxy-Labels reaktivieren. Siehe ROLLBACK_RUNBOOK.md.
+services:
+  proxy:
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      # HTTP-Router → HTTPS-Redirect
+      - traefik.http.routers.orkoprox-http.rule=Host(`llm.true-code.de`)
+      - traefik.http.routers.orkoprox-http.entrypoints=web
+      - traefik.http.routers.orkoprox-http.middlewares=orkoprox-redirect
+      - traefik.http.middlewares.orkoprox-redirect.redirectscheme.scheme=https
+      # HTTPS-Router (TLS via Let's Encrypt resolver `le`)
+      - traefik.http.routers.orkoprox.rule=Host(`llm.true-code.de`)
+      - traefik.http.routers.orkoprox.entrypoints=websecure
+      - traefik.http.routers.orkoprox.tls=true
+      - traefik.http.routers.orkoprox.tls.certresolver=le
+      - traefik.http.services.orkoprox.loadbalancer.server.port=8091

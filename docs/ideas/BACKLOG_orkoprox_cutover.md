@@ -29,7 +29,16 @@ nackten model-String sendet → 404 möglich.
 Falls real genutzt: `CUSTOM_PROVIDERS`-Alias ODER Aufrufer auf `xhigh`/`reason` umstellen (Infra/Config,
 kein orkoprox-Code-Edit). Bis dahin: Risiko niedrig (kein Beleg für aktive Nutzung).
 
-## B3 — orkoprox hat keinen `/v1/responses`-Endpoint (OpenAI Responses-API)
+## B3 — orkoprox hat keinen `/v1/responses`-Endpoint (OpenAI Responses-API) ⭐ PRIO HOCH
+**Owner-Direktive 2026-06-19:** „muss orkoprox bekommen, bald, enterprise grade." → P1-Backlog,
+nicht optional. Eigener Wellen-Schnitt nach dem Cutover (W1-W6). Nicht Teil des Cutover-Scopes
+(kein aktiver Nutzer, blockt den Cutover nicht), aber als nächste orkoprox-Welle einzuplanen.
+
+**Scope (Enterprise-Grade):** `/v1/responses` POST + GET + DELETE, `previous_response_id`-Verkettung,
+`store`-Flag mit Redis-Backend (Konversations-State), `input`/`output`-Schema OpenAI-kompatibel,
+Streaming-Variante, Tool-Calls im Responses-Format. Test-Suite + Live-Smoke. Upstream-fähig
+(novalis111/orkoprox). Geschätzt ~5-8 PT (eigener Plan-SSOT).
+
 **Gefunden:** W3-Canary, 2026-06-19.
 orkoprox implementiert nur Chat-Completions (`/v1/chat/completions`), NICHT die OpenAI
 Responses-API (`/v1/responses`, `previous_response_id`, store). Live: `/v1/responses` → **404**.
