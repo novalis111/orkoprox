@@ -334,7 +334,15 @@ class Settings(BaseSettings):
     # PRE-guard. Reserved for internal, non-PII classifiers where benign
     # business actions can be misread as policy violations. The POST-guard
     # still runs, so the model output stays screened. Comma-separated.
-    guard_pre_skip_use_cases: str = "mode_classify,intent_classify,plan_repair"
+    #
+    # avi_chat / avi_intent_classify (W-LC-AVI-PERFEKTION 2026-06-20): the
+    # Leitivo Avi assistant operates on the tenant's OWN customer data (DSGVO
+    # Art. 6 legitimate interest / contract). Qwen3Guard's PII-third-party
+    # category is a FALSE POSITIVE here — 'show invoices of Frau Sommer' is a
+    # legal business action, not a third-party-PII leak. The pre-guard blocked
+    # it with 451; the authorized business use-case skips the pre-guard while
+    # the post-guard keeps screening the model output.
+    guard_pre_skip_use_cases: str = "mode_classify,intent_classify,plan_repair,avi_chat,avi_intent_classify"
     # Fail-open: bei Guard-Ausfall nicht blockieren, nur loggen. Pflicht
     # fuer Verfuegbarkeit. False nur in extra-strikten Compliance-Modi.
     guard_fail_open: bool = True
