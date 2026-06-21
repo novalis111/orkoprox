@@ -8,13 +8,33 @@ import httpx
 import pytest
 
 
+# Live-Compat-Matrix gegen den orkoprox-Gateway (SSOT-LLM-Proxy).
+#
+# Bis zum /v1/responses-Cutover lief diese Matrix gegen den archivierten
+# tc-llm-proxy (der den Responses-Endpoint hatte). Seit orkoprox den Endpoint
+# selbst implementiert (app/main.py + app/responses_api.py) zeigt der Default
+# auf orkoprox: Port 8091 (Makefile `dev`/`docker-run`, docker-compose).
+#
+# Konfiguration via Env (alle optional):
+#   LIVE_COMPAT_API_KEY   — Proxy-API-Key. NICHT gesetzt → Tests werden geskippt.
+#   LIVE_COMPAT_BASE_URL  — Default http://localhost:8091 (lokaler orkoprox).
+#   LIVE_COMPAT_MODELS    — Komma-Liste der zu testenden Aliase.
+#   LIVE_COMPAT_TIMEOUT_S — Request-Timeout (Default 90s).
 LIVE_COMPAT_BASE_URL = "LIVE_COMPAT_BASE_URL"
 LIVE_COMPAT_API_KEY = "LIVE_COMPAT_API_KEY"
 LIVE_COMPAT_TIMEOUT_S = "LIVE_COMPAT_TIMEOUT_S"
+LIVE_COMPAT_MODELS = "LIVE_COMPAT_MODELS"
 
 EXPECTED_TOOL_NAME = "exec_command"
 EXPECTED_TOOL_ARGS = {"cmd": "pwd"}
-MATRIX_MODELS = ("high", "gpt-5.4")
+# Default-Matrix: ein orkoprox-Tier-Alias (`high`) plus ein Client-Wire-Alias
+# (`gpt-5.4`, von der lc/oekotopia-Alias-Map aufgelöst). Per LIVE_COMPAT_MODELS
+# überschreibbar, wenn eine Ziel-Umgebung andere Aliase exponiert.
+MATRIX_MODELS = tuple(
+    m.strip()
+    for m in os.getenv(LIVE_COMPAT_MODELS, "high,gpt-5.4").split(",")
+    if m.strip()
+)
 
 
 def _require_live_config() -> tuple[str, str, float]:

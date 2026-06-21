@@ -50,6 +50,16 @@ from app.services.content_moderation import (
 )
 from app.token_metering import TokenMeteringService, KeyConfig
 from app.schemas import ChatCompletionsRequest, EmbeddingsRequest, RerankRequest
+from app.responses_api import (
+    ResponseStore,
+    ResponsesRequest,
+    chat_response_to_responses,
+    new_response_id,
+    now_unix,
+    reconstruct_prior_messages,
+    responses_request_to_chat,
+    translate_chat_stream_to_responses,
+)
 from app.admin_auth import enforce_admin_auth, matches_any
 from app.audit_log import AuditLog, mask_key
 from app.rate_limit import RateLimiter
@@ -88,6 +98,20 @@ if settings.redis_url:
 metering_service = TokenMeteringService(
     redis_client=_metering_redis, header_prefix=settings.brand_header_prefix
 )
+
+# Server-State für /v1/responses (store-Flag, previous_response_id-Verkettung,
+# Retrieval/List/Delete). Nutzt denselben Storage-Backend wie das Metering:
+# Redis wenn konfiguriert, sonst Zero-Config in-memory (State resettet bei
+# Restart — für die Responses-Konversations-Verkettung akzeptabel).
+def _make_response_store() -> ResponseStore:
+    from app.storage import MemoryStore, RedisStore
+
+    if _metering_redis is not None:
+        return ResponseStore(RedisStore(_metering_redis))
+    return ResponseStore(MemoryStore())
+
+
+response_store = _make_response_store()
 
 # Per-key request rate / concurrency limiting (opt-in; 0 = disabled).
 rate_limiter = RateLimiter(
@@ -1683,6 +1707,187 @@ async def chat_completions(
             provider_response=_provider_response_excerpt(exc),
         )
         raise err
+
+
+@app.post("/v1/responses")
+async def responses(
+    request: Request,
+    body: ResponsesRequest,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    """OpenAI Responses-API. DRY-Adapter über ``chat_completions``:
+
+    Die gesamte Pipeline (Pre-/Post-Guard, F8-Eskalationskaskade, Semantic-
+    Cache, F6-Hooks, Tool-Call-Sanitizing, Streaming) wird NICHT dupliziert —
+    wir übersetzen Request→Chat, rufen ``chat_completions`` auf und übersetzen
+    die Antwort zurück ins Responses-Format. Server-State (``store``,
+    ``previous_response_id``, Retrieval) liegt im ``response_store``.
+    """
+    # previous_response_id → vorige Konversation rekonstruieren und voranstellen.
+    prior_messages = reconstruct_prior_messages(
+        response_store, body.previous_response_id
+    )
+    chat_payload = responses_request_to_chat(body, prior_messages)
+    chat_body = ChatCompletionsRequest.model_validate(chat_payload)
+
+    response_id = new_response_id()
+    created_at = now_unix()
+    # Die Input-Messages dieser Runde (ohne Assistant-Output) für späteren
+    # Retrieval/Verkettungs-Bedarf festhalten.
+    input_messages = list(chat_payload["messages"])
+
+    if body.stream:
+        chat_result = await chat_completions(
+            request, chat_body, x_api_key=x_api_key, authorization=authorization
+        )
+        # chat_completions liefert bei Guard-Pre-Block ein JSONResponse (451) —
+        # das reichen wir unverändert durch.
+        if not isinstance(chat_result, StreamingResponse):
+            return chat_result
+        resolved_model = chat_result.headers.get(f"{_HP}-Escalated-To", body.model)
+
+        def _persist(completed: dict[str, Any]) -> None:
+            if body.store:
+                response_store.save(completed, input_messages)
+
+        translated = translate_chat_stream_to_responses(
+            chat_result.body_iterator,
+            body,
+            response_id=response_id,
+            created_at=created_at,
+            resolved_model=resolved_model,
+            on_complete=_persist,
+        )
+        return StreamingResponse(translated, media_type="text/event-stream")
+
+    chat_result = await chat_completions(
+        request, chat_body, x_api_key=x_api_key, authorization=authorization
+    )
+    if not isinstance(chat_result, JSONResponse):
+        return chat_result
+    # JSONResponse.body ist bereits serialisiert — zurück nach dict.
+    data = json.loads(bytes(chat_result.body))
+    # Guard-Pre-Block / Hook-Block liefern kein Chat-Completion-Objekt.
+    if data.get("object") != "chat.completion" and "choices" not in data:
+        return chat_result
+    resolved_model = chat_result.headers.get(
+        f"{_HP}-Escalated-To", data.get("model", body.model)
+    )
+    response_obj = chat_response_to_responses(
+        data,
+        body,
+        response_id=response_id,
+        created_at=created_at,
+        resolved_model=resolved_model,
+    )
+    if body.store:
+        response_store.save(response_obj, input_messages)
+    resp = JSONResponse(response_obj)
+    # Metering-/Guard-Header aus dem Chat-Response durchreichen.
+    for header_key, header_val in chat_result.headers.items():
+        if header_key.lower().startswith(_HP.lower()):
+            resp.headers[header_key] = header_val
+    return resp
+
+
+@app.get("/v1/responses")
+async def list_responses(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    _enforce_internal_auth(x_api_key, authorization)
+    items = response_store.list(limit=limit)
+    return JSONResponse(
+        {
+            "object": "list",
+            "data": items,
+            "has_more": False,
+            "first_id": items[0]["id"] if items else None,
+            "last_id": items[-1]["id"] if items else None,
+        }
+    )
+
+
+@app.get("/v1/responses/{response_id}")
+async def get_response(
+    response_id: str,
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    _enforce_internal_auth(x_api_key, authorization)
+    obj = response_store.get(response_id)
+    if obj is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Response {response_id!r} not found",
+                    "type": "invalid_request_error",
+                    "code": "response_not_found",
+                }
+            },
+        )
+    return JSONResponse(obj)
+
+
+@app.get("/v1/responses/{response_id}/input_items")
+async def get_response_input_items(
+    response_id: str,
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    _enforce_internal_auth(x_api_key, authorization)
+    items = response_store.input_items(response_id)
+    if items is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Response {response_id!r} not found",
+                    "type": "invalid_request_error",
+                    "code": "response_not_found",
+                }
+            },
+        )
+    return JSONResponse(
+        {
+            "object": "list",
+            "data": items,
+            "has_more": False,
+            "first_id": items[0]["id"] if items else None,
+            "last_id": items[-1]["id"] if items else None,
+        }
+    )
+
+
+@app.delete("/v1/responses/{response_id}")
+async def delete_response(
+    response_id: str,
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    _enforce_internal_auth(x_api_key, authorization)
+    deleted = response_store.delete(response_id)
+    if not deleted:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Response {response_id!r} not found",
+                    "type": "invalid_request_error",
+                    "code": "response_not_found",
+                }
+            },
+        )
+    return JSONResponse(
+        {"id": response_id, "object": "response.deleted", "deleted": True}
+    )
 
 
 @app.post("/v1/audio/transcriptions")
