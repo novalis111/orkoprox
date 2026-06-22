@@ -38,6 +38,12 @@ dev = [
   "ruff>=0.12.12",
 ]
 
+# Only `app` is a distributable package; `deploy`, `docs`, `scripts`, and `tests`
+# are repo dirs, not modules. Pin discovery so setuptools flat-layout autodiscovery
+# does not abort on "multiple top-level packages" when building the editable install.
+[tool.setuptools]
+packages = ["app"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
