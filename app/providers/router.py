@@ -395,6 +395,16 @@ class ProviderRegistry:
             return self._default_model_for_provider(
                 candidate_provider, is_vision=route_key in self._VISION_ALIASES
             )
+        # Cross-provider failover: prefer an explicit per-tier target model so a
+        # reasoning request stays a reasoning request on the secondary (e.g. OVH
+        # reason/gpt-oss-120b → mistral_lp/mistral-large-latest) instead of
+        # silently dropping to the secondary's cheap default. Only applies when
+        # the configured target's provider prefix matches THIS candidate — so a
+        # mistral_lp-targeted override never leaks onto an unrelated fallback
+        # provider further down the chain.
+        configured = self._configured_fallback_model(candidate_provider, route_key)
+        if configured:
+            return configured
         # Task aliases prefer fast non-reasoning models on Together.ai fallback
         prefer_fast = route_key in self._FAST_TASK_ALIASES
         return self._default_model_for_provider(
@@ -402,6 +412,31 @@ class ProviderRegistry:
             prefer_fast=prefer_fast,
             is_vision=route_key in self._VISION_ALIASES,
         )
+
+    def _configured_fallback_model(
+        self, candidate_provider: str, route_key: str
+    ) -> str:
+        """Resolve the configured cross-provider failover model for a route.
+
+        Reads ``Settings.fallback_model_alias_map`` (``MODEL_ALIAS_FALLBACK_*``).
+        The entry is ``provider/model``; we honour it only when its provider
+        prefix resolves to the candidate currently being tried. Returns ``""``
+        when nothing is configured or the prefix targets a different provider —
+        in which case the caller falls back to the provider-default behaviour.
+        """
+        target = self.settings.fallback_model_alias_map.get((route_key or "").lower())
+        if not target:
+            return ""
+        target = target.strip()
+        if "/" in target:
+            prefix, model = target.split("/", 1)
+            if PROVIDER_ALIASES.get(prefix, prefix) != candidate_provider:
+                return ""
+            return self._normalize_requested_model(model)
+        # Prefix-less target: a bare model name applies to whichever secondary
+        # provider is being tried (rare, but lets a single-secondary setup omit
+        # the redundant prefix).
+        return self._normalize_requested_model(target)
 
     def _is_cooling_down(self, provider_name: str, *, scope: str = "") -> bool:
         key = f"{provider_name}:{scope}" if scope else provider_name

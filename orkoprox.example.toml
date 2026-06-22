@@ -16,6 +16,18 @@ reason      = "ovh/gpt-oss-120b"
 xhigh       = "ovh/Meta-Llama-3_3-70B-Instruct"
 long_context = "ovh/Qwen3.5-9B"
 
+# Cross-provider failover target models (per tier/task). When OVH is unhealthy
+# and the request fails over to a SECONDARY provider, these pick the model the
+# secondary serves — so a reasoning tier stays a reasoning tier instead of
+# dropping to the secondary's cheap default. Format: "<provider>/<model>".
+# Each "fallback_<tier>" maps to MODEL_ALIAS_FALLBACK_<TIER>. Requires the
+# secondary in the chain (FALLBACK_PROVIDERS_<TIER>=ovh,mistral_lp) + its key.
+# Billing follows the actual model used (Mistral pricing for Mistral calls).
+fallback_chat         = "mistral_lp/mistral-small-latest"
+fallback_reason       = "mistral_lp/mistral-large-latest"
+fallback_xhigh        = "mistral_lp/mistral-large-latest"
+fallback_long_context = "mistral_lp/mistral-large-latest"
+
 # Per-key request limits (0 = disabled). Applied live on reload.
 [limits]
 rate_limit_per_minute  = 120

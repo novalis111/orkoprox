@@ -304,6 +304,69 @@ class Settings(BaseSettings):
             "report_structure": self.model_alias_report_structure,
         }
 
+    # ── Cross-provider failover target models (per tier/task) ──────────────
+    # When OVH (or whichever PRIMARY_PROVIDER) is unhealthy and the request
+    # fails over to a SECONDARY provider in the fallback chain, these decide
+    # WHICH model the secondary serves — per tier/task alias. Format:
+    # ``provider/model`` (e.g. ``mistral_lp/mistral-large-latest``).
+    #
+    # Without an entry the router keeps its legacy behaviour (the secondary
+    # provider's default model). With one, e.g. OVH ``reason`` (gpt-oss-120b)
+    # fails over to ``mistral_lp/mistral-large-latest`` instead of the cheap
+    # Mistral-Small default — so a reasoning request stays a reasoning request.
+    #
+    # Empty by default → no behaviour change for single-provider deployments.
+    # Provider-correct billing follows automatically: the router returns the
+    # ACTUAL provider+model used, which token_metering.record_usage() prices
+    # with the right (Mistral vs OVH) pricing map.
+    #
+    # Owner-Direktive 2026-06-22: chat→Mistral-Small, reason/xhigh→Mistral-Large.
+    # Frei konfigurierbar pro Tier — beliebige Provider/Modelle.
+    model_alias_fallback_xhigh: str = ""
+    model_alias_fallback_high: str = ""
+    model_alias_fallback_medium: str = ""
+    model_alias_fallback_low: str = ""
+    model_alias_fallback_classify: str = ""
+    model_alias_fallback_extract: str = ""
+    model_alias_fallback_compose: str = ""
+    model_alias_fallback_chat: str = ""
+    model_alias_fallback_reason: str = ""
+    model_alias_fallback_report: str = ""
+    model_alias_fallback_reason_lite: str = ""
+    model_alias_fallback_long_context: str = ""
+    model_alias_fallback_reason_mid: str = ""
+    model_alias_fallback_ocr: str = ""
+    model_alias_fallback_vision: str = ""
+
+    @property
+    def fallback_model_alias_map(self) -> dict[str, str]:
+        """Tier/task alias → ``provider/model`` failover target (cross-provider).
+
+        Mirrors ``model_alias_map`` but for the SECONDARY-provider model chosen
+        on failover. Consumed by ``router._model_for_candidate``. Only non-empty
+        entries are returned, so an unset tier transparently keeps the legacy
+        provider-default behaviour. Policy-TOML configurable via the same
+        ``model_alias_*`` attribute convention (``fallback_<tier>`` aliases).
+        """
+        raw = {
+            "xhigh": self.model_alias_fallback_xhigh,
+            "high": self.model_alias_fallback_high,
+            "medium": self.model_alias_fallback_medium,
+            "low": self.model_alias_fallback_low,
+            "classify": self.model_alias_fallback_classify,
+            "extract": self.model_alias_fallback_extract,
+            "compose": self.model_alias_fallback_compose,
+            "chat": self.model_alias_fallback_chat,
+            "reason": self.model_alias_fallback_reason,
+            "report": self.model_alias_fallback_report,
+            "reason_lite": self.model_alias_fallback_reason_lite,
+            "long_context": self.model_alias_fallback_long_context,
+            "reason_mid": self.model_alias_fallback_reason_mid,
+            "ocr": self.model_alias_fallback_ocr,
+            "vision": self.model_alias_fallback_vision,
+        }
+        return {k: v.strip() for k, v in raw.items() if v and v.strip()}
+
     # Per-task fallback chains (graceful degradation). Each ``fallback_providers_*``
     # is ENV-overridable, e.g. to add a local stub provider for dev tests.
     fallback_providers_classify: str = "ovh"
